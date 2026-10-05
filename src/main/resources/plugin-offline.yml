@@ -4,7 +4,7 @@ main: net.watones.novagems.NovaGemsPlugin
 api-version: '1.21'
 authors: [Watones]
 description: Economía secundaria por ciclos de sesión para Paper.
-softdepend: [PlaceholderAPI]
+softdepend: [PlaceholderAPI, LuckPerms, WorldGuard]
 commands:
   gemas:
     description: Abre el menú de canjes y consulta tu saldo de gemas.
@@ -15,3 +15,6 @@ commands:
 permissions:
   novagems.shop: {default: true}
   novagems.balance: {default: true}
+  novagems.fly.bypass:
+    description: Ignora combate, mundos y regiones bloqueados del fly.
+    default: op

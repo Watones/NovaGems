@@ -162,7 +162,7 @@ rewards:
     actions:
       - type: COMMAND
         # TODO: confirma la sintaxis real de tu plugin de permisos (LuckPerms asumido aquí).
-        value: "lp user <player> parent addtemp waton 7d"
+        value: "lp user <player> parent addtemp waton 7d accumulate"
       - type: MESSAGE
         value: "<green>¡Obtuviste el rango Waton por 7 días!"
 
@@ -185,7 +185,7 @@ rewards:
     actions:
       - type: COMMAND
         # TODO: confirma la sintaxis real de tu plugin de permisos (LuckPerms asumido aquí).
-        value: "lp user <player> parent addtemp vip+ 7d"
+        value: "lp user <player> parent addtemp vip+ 7d accumulate"
       - type: MESSAGE
         value: "<green>¡Obtuviste el rango VIP+ por 7 días!"
 
@@ -208,7 +208,7 @@ rewards:
     actions:
       - type: COMMAND
         # TODO: confirma la sintaxis real de tu plugin de permisos (LuckPerms asumido aquí).
-        value: "lp user <player> parent addtemp mvip+ 7d"
+        value: "lp user <player> parent addtemp mvip+ 7d accumulate"
       - type: MESSAGE
         value: "<green>¡Obtuviste el rango MVIP+ por 7 días!"
 
@@ -231,7 +231,7 @@ rewards:
     actions:
       - type: COMMAND
         # TODO: confirma la sintaxis real de tu plugin de permisos (LuckPerms asumido aquí).
-        value: "lp user <player> parent addtemp mvip++ 7d"
+        value: "lp user <player> parent addtemp mvip++ 7d accumulate"
       - type: MESSAGE
         value: "<green>¡Obtuviste el rango MVIP++ por 7 días!"
 
@@ -259,7 +259,7 @@ rewards:
     confirmation: true
     actions:
       - type: COMMAND
-        value: "lp user <player> permission settemp essentials.repair true 1d"
+        value: "lp user <player> permission settemp essentials.repair true 1d accumulate"
       - type: MESSAGE
         value: "<green>¡Tienes acceso a /repair por 1 día!"
 
@@ -288,7 +288,7 @@ rewards:
     actions:
       - type: COMMAND
         # TODO: confirma el nodo de permiso real de tu plugin de anvil (EssentialsX asumido aquí).
-        value: "lp user <player> permission settemp essentials.anvil true 1d"
+        value: "lp user <player> permission settemp essentials.anvil true 1d accumulate"
       - type: MESSAGE
         value: "<green>¡Tienes acceso a /anvil por 1 día!"
 
@@ -316,7 +316,7 @@ rewards:
     actions:
       - type: COMMAND
         # TODO: confirma el nodo de permiso real de tu plugin de fly (EssentialsX asumido aquí).
-        value: "lp user <player> permission settemp essentials.fly true 1d"
+        value: "lp user <player> permission settemp essentials.fly true 1d accumulate"
       - type: MESSAGE
         value: "<green>¡Tienes acceso a /fly por 1 día!"
 
@@ -344,7 +344,7 @@ rewards:
     actions:
       - type: COMMAND
         # TODO: confirma el nodo de permiso real de tu plugin de fly (EssentialsX asumido aquí).
-        value: "lp user <player> permission settemp essentials.fly true 3d"
+        value: "lp user <player> permission settemp essentials.fly true 3d accumulate"
       - type: MESSAGE
         value: "<green>¡Tienes acceso a /fly por 3 días!"
 
@@ -372,7 +372,7 @@ rewards:
     actions:
       - type: COMMAND
         # TODO: confirma el nodo de permiso real de tu plugin de fly (EssentialsX asumido aquí).
-        value: "lp user <player> permission settemp essentials.fly true 5d"
+        value: "lp user <player> permission settemp essentials.fly true 5d accumulate"
       - type: MESSAGE
         value: "<green>¡Tienes acceso a /fly por 5 días!"
 
@@ -401,7 +401,7 @@ rewards:
     actions:
       - type: COMMAND
         # TODO: confirma el nodo de permiso real de tu plugin de enderchest (EssentialsX asumido aquí).
-        value: "lp user <player> permission settemp essentials.enderchest true 5d"
+        value: "lp user <player> permission settemp essentials.enderchest true 5d accumulate"
       - type: MESSAGE
         value: "<green>¡Tienes acceso a /enderchest por 5 días!"
 
@@ -429,7 +429,7 @@ rewards:
     confirmation: true
     actions:
       - type: COMMAND
-        value: "lp user <player> permission settemp essentials.workbench true 5d"
+        value: "lp user <player> permission settemp essentials.workbench true 5d accumulate"
       - type: MESSAGE
         value: "<green>¡Tienes acceso a /craft por 5 días!"
 

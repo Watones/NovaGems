@@ -14,6 +14,11 @@ import net.watones.novagems.config.ConfigManager;
 import net.watones.novagems.config.RuntimeConfig;
 import net.watones.novagems.config.ShopConfig;
 import net.watones.novagems.economy.WalletService;
+import net.watones.novagems.fly.FlyListener;
+import net.watones.novagems.fly.FlyService;
+import net.watones.novagems.fly.FlySettings;
+import net.watones.novagems.fly.FlyTimeSource;
+import net.watones.novagems.fly.RegionLookup;
 import net.watones.novagems.listener.ActivityListener;
 import net.watones.novagems.listener.KillRewardListener;
 import net.watones.novagems.listener.PlayerConnectionListener;
@@ -39,6 +44,7 @@ public final class NovaGemsPlugin extends JavaPlugin {
   private volatile BukkitTask alertTask;
   private volatile DiscordWebhookAlertService alerts;
   private volatile DatabaseBackupService backups;
+  private volatile FlyService fly;
   private volatile boolean stopping;
   private volatile int shutdownTotalSeconds = 10;
 
@@ -54,6 +60,7 @@ public final class NovaGemsPlugin extends JavaPlugin {
       saveDefaultConfig();
       saveBundled("messages.yml");
       saveBundled("shop.yml");
+      saveBundled("fly.yml");
 
       ConfigManager config = new ConfigManager(this);
       RuntimeConfig runtime = config.load();
@@ -64,6 +71,7 @@ public final class NovaGemsPlugin extends JavaPlugin {
       var initialShop = shopConfig.validateSafety(
           shopConfig.parseCandidate(), runtime.allowMultipleIrreversibleActions());
       shopConfig.swap(initialShop);
+      FlySettings flySettings = loadFlySettings();
 
       StorageProvider initializedStorage = config.createStorage();
       initializedStorage.initialize();
@@ -109,7 +117,8 @@ public final class NovaGemsPlugin extends JavaPlugin {
       ShopService shop =
           new ShopService(this, shopConfig, config, initializedWallets, messages);
       BootstrapContext context = new BootstrapContext(config, runtime, messages, shopConfig,
-          initializedStorage, initializedWallets, registry, guard, initializedSessions, shop);
+          initializedStorage, initializedWallets, registry, guard, initializedSessions, shop,
+          flySettings);
       Bukkit.getScheduler().runTask(this, () -> finishEnable(context));
     } catch (Exception failure) {
       getLogger().log(Level.SEVERE, "NovaGems no puede iniciar de forma segura", failure);
@@ -148,6 +157,7 @@ public final class NovaGemsPlugin extends JavaPlugin {
         new KillRewardListener(context.wallets, context.config, killTracker), this);
     restoreDailyKills(context.wallets, killTracker);
     startBackups(context.storage, context.runtime.backup());
+    FlyService flyService = startFly(context.flySettings);
 
     NovaGemsCommand novaGems = new NovaGemsCommand(
         this, context.wallets, context.messages, context.config, context.shopConfig,
@@ -158,6 +168,12 @@ public final class NovaGemsPlugin extends JavaPlugin {
           DiscordWebhookAlertService currentAlerts = alerts;
           if (currentAlerts != null) currentAlerts.reconfigure(next);
         });
+    if (flyService != null) {
+      novaGems.addReloadStep(() -> {
+        FlySettings next = FlySettings.load(flyFile());
+        return () -> flyService.apply(next);
+      });
+    }
     command("novagems").setExecutor(novaGems);
     command("novagems").setTabCompleter(novaGems);
     command("gemas").setExecutor(novaGems);
@@ -196,6 +212,7 @@ public final class NovaGemsPlugin extends JavaPlugin {
     stopping = true;
     if (rewardTask != null) rewardTask.cancel();
     if (alertTask != null) alertTask.cancel();
+    if (fly != null) fly.stop();
     long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(shutdownTotalSeconds);
     SessionService.ShutdownReport sessionReport = sessions == null
         ? new SessionService.ShutdownReport(0, 0) : sessions.shutdownAndDrain(deadline);
@@ -254,6 +271,42 @@ public final class NovaGemsPlugin extends JavaPlugin {
     // First pass a minute after enable, out of the way of recovery replay; then hourly checks.
     service.start(60, 3600);
     backups = service;
+  }
+
+  /** A typo in fly.yml must not take the gem economy down with it: fly just stays off. */
+  private FlySettings loadFlySettings() {
+    try {
+      return FlySettings.load(flyFile());
+    } catch (Exception failure) {
+      getLogger().log(Level.SEVERE, "fly.yml no es válido; el sistema de fly queda desactivado"
+          + " hasta corregirlo y reiniciar", failure);
+      return null;
+    }
+  }
+
+  private FlyService startFly(FlySettings settings) {
+    if (settings == null) return null;
+    FlyTimeSource time = FlyTimeSource.PERMANENT_ONLY;
+    if (getServer().getPluginManager().isPluginEnabled("LuckPerms")) {
+      time = FlyTimeSource.luckPerms();
+    } else {
+      getLogger().info("LuckPerms no está instalado: el fly no mostrará tiempo restante");
+    }
+    RegionLookup regions = RegionLookup.NONE;
+    if (getServer().getPluginManager().isPluginEnabled("WorldGuard")) {
+      regions = RegionLookup.worldGuard(getLogger());
+    } else if (!settings.blockedRegions().isEmpty()) {
+      getLogger().warning("fly.yml tiene blocked-regions pero WorldGuard no está instalado");
+    }
+    FlyService service = new FlyService(this, settings, time, regions);
+    getServer().getPluginManager().registerEvents(new FlyListener(service), this);
+    service.start();
+    fly = service;
+    return service;
+  }
+
+  private File flyFile() {
+    return new File(getDataFolder(), "fly.yml");
   }
 
   /**
@@ -331,5 +384,6 @@ public final class NovaGemsPlugin extends JavaPlugin {
       SessionRegistry registry,
       ActivityGuard guard,
       SessionService sessions,
-      ShopService shop) {}
+      ShopService shop,
+      FlySettings flySettings) {}
 }

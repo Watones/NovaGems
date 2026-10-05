@@ -88,6 +88,21 @@ La tienda admite tamaños de 9 a 54 en múltiplos de 9 cuando sus slots configur
 
 La salud del storage, recovery y journal continúa registrándose en consola. Los comandos públicos de diagnóstico y revisión fueron retirados de la interfaz. Rewards con `price: 0` se deshabilitan: el mínimo es 1. El apagado usa timeouts separados de 5 segundos para journal y DB y reporta de forma SEVERE cualquier captura no confirmada.
 
+## Fly
+
+`plugins/NovaGems/fly.yml` (se crea solo al iniciar) controla el sistema de vuelo:
+
+- Mantiene el `/fly` tras `/home`, `/warp`, `/tp`, carteles-elevador, portales, barcos/caballos,
+  muerte y cambio de modo de juego. Al entrar se activa a todo el que tenga el permiso.
+- Se quita al pegar o recibir un golpe de otro jugador (`combat.tag-seconds`, igual que
+  DeluxeCombat) y en `blocked-worlds` / `blocked-regions` (WorldGuard); vuelve solo al terminar.
+- Con LuckPerms, quien tiene fly temporal (comprado o por rango temporal) ve el tiempo restante
+  arriba de la hotbar; al llegar a cero pierde fly y permiso y cae lento hasta tocar el suelo.
+- `novagems.fly.bypass` (OP por defecto) ignora combate y zonas. Se recarga con `/novagems reload`.
+
+Las compras temporales de `shop.yml` usan `accumulate`: comprar otra vez suma días en vez de
+fallar (LuckPerms, por defecto, rechaza un permiso temporal repetido).
+
 ## Alertas de Discord
 
 Las alertas son opcionales y nunca controlan una mutación económica. Se envían en un worker daemon con cola acotada, timeout y deduplicación; una caída de Discord no bloquea Paper, recovery ni shutdown. Configura una webhook nueva únicamente en `plugins/NovaGems/config.yml` y reinicia o ejecuta `/novagems admin reload`:

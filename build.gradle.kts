@@ -20,6 +20,7 @@ repositories {
 dependencies {
     compileOnly("io.papermc.paper:paper-api:1.21.11-R0.1-SNAPSHOT")
     compileOnly("me.clip:placeholderapi:2.12.3")
+    compileOnly("net.luckperms:api:5.4")
 
     implementation("com.zaxxer:HikariCP:7.0.2")
     implementation("org.xerial:sqlite-jdbc:3.51.1.0")
