@@ -1,5 +1,3 @@
-import java.io.File
-
 plugins {
     java
     id("com.gradleup.shadow") version "9.2.2"
@@ -8,8 +6,6 @@ plugins {
 group = "net.watones"
 version = "1.1.4"
 val pluginVersion = version.toString()
-val slimArtifact = layout.buildDirectory.file("libs/NovaGems-$pluginVersion.jar")
-val offlineArtifact = layout.buildDirectory.file("libs/NovaGems-$pluginVersion-offline.jar")
 
 repositories {
     mavenCentral()
@@ -20,7 +16,6 @@ repositories {
 dependencies {
     compileOnly("io.papermc.paper:paper-api:1.21.11-R0.1-SNAPSHOT")
     compileOnly("me.clip:placeholderapi:2.12.3")
-    compileOnly("net.luckperms:api:5.4")
 
     implementation("com.zaxxer:HikariCP:7.0.2")
     implementation("org.xerial:sqlite-jdbc:3.51.1.0")
@@ -62,28 +57,5 @@ tasks {
         mergeServiceFiles()
     }
 
-    fun registerArtifactSmoke(name: String, mode: String, artifact: Provider<RegularFile>,
-                              includeRuntimeLibraries: Boolean) = register<JavaExec>(name) {
-        dependsOn(testClasses, if (mode == "slim") jar else shadowJar)
-        classpath = sourceSets.test.get().output
-        mainClass.set("net.watones.novagems.build.ArtifactSmokeMain")
-        doFirst {
-            val slf4j = configurations.testRuntimeClasspath.get().files
-                .filter { it.name.startsWith("slf4j-") }
-            val libraries = if (includeRuntimeLibraries) {
-                configurations.runtimeClasspath.get().files + slf4j
-            } else slf4j
-            setArgs(listOf(mode, artifact.get().asFile.absolutePath,
-                libraries.joinToString(File.pathSeparator) { it.absolutePath }))
-        }
-    }
-
-    // verifySlimArtifact/verifyOfflineArtifact reference net.watones.novagems.build.ArtifactSmokeMain,
-    // a class that has never existed in this repository (checked the full git history). They were
-    // wired into `check` without ever landing the class, so `build`/`check` always failed here.
-    // Left registered (harmless, just unused) in case someone wants to implement the smoke test and
-    // re-add the dependsOn below; not wiring them in until then.
-    registerArtifactSmoke("verifySlimArtifact", "slim", slimArtifact, true)
-    registerArtifactSmoke("verifyOfflineArtifact", "offline", offlineArtifact, false)
     build { dependsOn(shadowJar) }
 }

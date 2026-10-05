@@ -153,6 +153,14 @@ public final class ShopConfig {
         throw new IllegalArgumentException(
             "quantity-selectable requiere exactamente una acción ITEM o COMMAND: " + id);
       }
+      // Without the placeholder the player would pay for N and the command would deliver one.
+      for (RewardAction action : actions) {
+        if (action instanceof RewardAction.Command command
+            && !command.value().contains("<quantity>")) {
+          throw new IllegalArgumentException(
+              "quantity-selectable requiere <quantity> en el COMMAND: " + id);
+        }
+      }
     }
     return new ShopReward(
         id,

@@ -4,7 +4,7 @@ main: net.watones.novagems.NovaGemsPlugin
 api-version: '1.21'
 authors: [Watones]
 description: Economía secundaria por ciclos de sesión para Paper.
-softdepend: [PlaceholderAPI, LuckPerms, WorldGuard]
+softdepend: [PlaceholderAPI]
 libraries:
   - com.zaxxer:HikariCP:7.0.2
   - org.xerial:sqlite-jdbc:3.51.1.0
@@ -19,6 +19,3 @@ commands:
 permissions:
   novagems.shop: {default: true}
   novagems.balance: {default: true}
-  novagems.fly.bypass:
-    description: Ignora combate, mundos y regiones bloqueados del fly.
-    default: op

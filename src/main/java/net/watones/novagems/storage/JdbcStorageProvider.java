@@ -124,7 +124,7 @@ public abstract class JdbcStorageProvider implements StorageProvider {
   private boolean addColumnIfMissing(String table, String column, String definition)
       throws SQLException {
     try (Connection connection = dataSource().getConnection()) {
-      if (hasColumn(connection.getMetaData(), table, column)) return false;
+      if (hasColumn(connection, table, column)) return false;
       try (Statement statement = connection.createStatement()) {
         statement.executeUpdate("ALTER TABLE " + table + " ADD COLUMN " + column + " " + definition);
       }
@@ -132,10 +132,13 @@ public abstract class JdbcStorageProvider implements StorageProvider {
     }
   }
 
-  private boolean hasColumn(DatabaseMetaData metadata, String table, String column)
+  private boolean hasColumn(Connection connection, String table, String column)
       throws SQLException {
+    DatabaseMetaData metadata = connection.getMetaData();
+    // The current catalog keeps MySQL from matching a same-named table in another database.
+    String catalog = connection.getCatalog();
     for (String candidate : List.of(table, table.toUpperCase(), table.toLowerCase())) {
-      try (ResultSet result = metadata.getColumns(null, null, candidate, null)) {
+      try (ResultSet result = metadata.getColumns(catalog, null, candidate, null)) {
         while (result.next()) {
           if (column.equalsIgnoreCase(result.getString("COLUMN_NAME"))) return true;
         }
@@ -186,7 +189,8 @@ public abstract class JdbcStorageProvider implements StorageProvider {
       boolean exists = false;
       for (String candidate : List.of(table, table.toUpperCase(), table.toLowerCase())) {
         try (ResultSet result =
-            connection.getMetaData().getIndexInfo(null, null, candidate, false, false)) {
+            connection.getMetaData()
+                .getIndexInfo(connection.getCatalog(), null, candidate, false, false)) {
           while (result.next()) {
             if (index.equalsIgnoreCase(result.getString("INDEX_NAME"))) {
               exists = true;
@@ -343,6 +347,10 @@ public abstract class JdbcStorageProvider implements StorageProvider {
           }
         }
         throw exception;
+      } catch (RuntimeException exception) {
+        // setAutoCommit(true) below commits whatever is open: never let it commit half a mutation.
+        connection.rollback();
+        throw exception;
       } finally {
         connection.setAutoCommit(true);
       }
@@ -376,9 +384,10 @@ public abstract class JdbcStorageProvider implements StorageProvider {
           spent = Math.addExact(spent, amount);
         }
         case SET -> {
-          if (amount > balance) earned = Math.addExact(earned, amount - balance);
-          if (amount < balance) spent = Math.addExact(spent, balance - amount);
-          balance = amount;
+          long target = maxBalanceConfigured ? Math.min(amount, maxBalance) : amount;
+          if (target > balance) earned = Math.addExact(earned, target - balance);
+          if (target < balance) spent = Math.addExact(spent, balance - target);
+          balance = target;
         }
         case REFUND_DEBIT -> {
           balance = Math.addExact(balance, amount);
@@ -405,11 +414,18 @@ public abstract class JdbcStorageProvider implements StorageProvider {
         operation.initialStatus() == TransactionStatus.DELIVERY_PENDING
             ? null
             : operation.createdAt();
+    // A credit or set clipped by the balance cap is recorded as what the account really got.
+    long amount =
+        switch (operation.kind()) {
+          case CREDIT -> after - before;
+          case SET -> after;
+          case DEBIT, REFUND_DEBIT -> operation.amount();
+        };
     return new GemTransaction(
         0,
         operation.operationId(),
         operation.accountId(),
-        operation.amount(),
+        amount,
         before,
         after,
         operation.type(),
@@ -669,6 +685,23 @@ public abstract class JdbcStorageProvider implements StorageProvider {
   }
 
   @Override
+  public int pruneTransactionsBefore(long cutoffMillis, Set<UUID> keep) throws Exception {
+    StringBuilder sql = new StringBuilder(
+        "DELETE FROM coin_transactions WHERE status IN ('COMMITTED','DELIVERED','REFUNDED')"
+            + " AND reward_notified=1 AND created_at < ?");
+    if (!keep.isEmpty()) {
+      sql.append(" AND operation_id NOT IN (").append("?,".repeat(keep.size() - 1)).append("?)");
+    }
+    try (Connection connection = dataSource().getConnection();
+        PreparedStatement statement = connection.prepareStatement(sql.toString())) {
+      statement.setLong(1, cutoffMillis);
+      int index = 2;
+      for (UUID operationId : keep) statement.setString(index++, operationId.toString());
+      return statement.executeUpdate();
+    }
+  }
+
+  @Override
   public List<GemTransaction> history(UUID uuid, int offset, int limit) throws Exception {
     try (Connection connection = dataSource().getConnection();
         PreparedStatement statement =
@@ -903,7 +936,9 @@ public abstract class JdbcStorageProvider implements StorageProvider {
   }
 
   private static boolean isConstraintViolation(SQLException exception) {
-    return exception.getSQLState() != null && exception.getSQLState().startsWith("23");
+    if (exception.getSQLState() != null) return exception.getSQLState().startsWith("23");
+    // sqlite-jdbc reports no SQLState; it only names the result code in the message.
+    return exception.getMessage() != null && exception.getMessage().contains("SQLITE_CONSTRAINT");
   }
 
   private static String truncate(String value, int length) {

@@ -29,6 +29,8 @@ public final class KillRewardListener implements Listener {
   public void onDeath(PlayerDeathEvent event) {
     Player killer = event.getEntity().getKiller();
     if (killer == null || killer.getUniqueId().equals(event.getEntity().getUniqueId())) return;
+    // Citizens and similar plugins mark their fake players with this metadata.
+    if (event.getEntity().hasMetadata("NPC") || killer.hasMetadata("NPC")) return;
     RuntimeConfig.KillRewards settings = config.current().killRewards();
     if (!settings.enabled()) return;
     UUID killerId = killer.getUniqueId();

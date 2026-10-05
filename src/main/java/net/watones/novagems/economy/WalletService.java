@@ -35,6 +35,7 @@ import net.watones.novagems.storage.StorageProvider;
 public final class WalletService implements AutoCloseable {
   private static final long ERROR_LOG_INTERVAL_NANOS = Duration.ofSeconds(30).toNanos();
   private static final int MAX_LEADERBOARD_CACHE_ENTRIES = 128;
+  private static final int MAX_PRUNE_EXCLUSIONS = 500;
   private final StorageProvider storage;
   private final JournalWriter journal;
   private final Consumer<Throwable> persistenceError;
@@ -588,9 +589,7 @@ public final class WalletService implements AutoCloseable {
 
   public CompletableFuture<EconomyResult> refundPurchase(
       UUID uuid, long amount, String reason, UUID purchaseOperationId) {
-    UUID refundId =
-        UUID.nameUUIDFromBytes(
-            ("novagems:refund:" + purchaseOperationId).getBytes(StandardCharsets.UTF_8));
+    UUID refundId = refundIdFor(purchaseOperationId);
     return mutate(
         new EconomyOperation(
             refundId,
@@ -602,6 +601,12 @@ public final class WalletService implements AutoCloseable {
             purchaseOperationId.toString(),
             TransactionStatus.REFUNDED,
             java.time.Instant.now()));
+  }
+
+  /** Deterministic, so refunding the same purchase twice is a duplicate instead of a second credit. */
+  private static UUID refundIdFor(UUID purchaseOperationId) {
+    return UUID.nameUUIDFromBytes(
+        ("novagems:refund:" + purchaseOperationId).getBytes(StandardCharsets.UTF_8));
   }
 
   public CompletableFuture<EconomyResult> mutate(EconomyOperation operation) {
@@ -1052,6 +1057,24 @@ public final class WalletService implements AutoCloseable {
 
   public CompletableFuture<Integer> pruneDailyKillsBefore(String day) {
     return submitIo(() -> storage.pruneDailyKillsBefore(day));
+  }
+
+  /**
+   * Skips the pass (returns -1) while the recovery journal is unusually large rather than build a
+   * huge exclusion list; the next pass picks the same rows up.
+   */
+  public CompletableFuture<Integer> pruneHistoryBefore(long cutoffMillis) {
+    return journal.loadAll().thenCompose(pending -> {
+      if (pending.size() > MAX_PRUNE_EXCLUSIONS) return CompletableFuture.completedFuture(-1);
+      java.util.Set<UUID> keep = new java.util.HashSet<>();
+      for (EconomyOperation operation : pending) {
+        keep.add(operation.operationId());
+        // A purchase still waiting to be closed may be refunded again: its refund row is what
+        // turns that second attempt into a duplicate.
+        keep.add(refundIdFor(operation.operationId()));
+      }
+      return submitIo(() -> storage.pruneTransactionsBefore(cutoffMillis, keep));
+    });
   }
 
   public CompletableFuture<List<GemTransaction>> history(UUID uuid, int page, int pageSize) {

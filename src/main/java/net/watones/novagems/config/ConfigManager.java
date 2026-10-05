@@ -62,6 +62,11 @@ public final class ConfigManager {
     if (backupKeepDays < 1 || backupKeepDays > 365) {
       throw new IllegalArgumentException("backup.keep-days debe estar entre 1 y 365");
     }
+    // 0 keeps the ledger forever. The floor leaves far more time than any retry or recovery needs.
+    int historyKeepDays = config.getInt("history.keep-days", 0);
+    if (historyKeepDays != 0 && (historyKeepDays < 30 || historyKeepDays > 3650)) {
+      throw new IllegalArgumentException("history.keep-days debe ser 0 o estar entre 30 y 3650");
+    }
 
     RuntimeConfig.StorageSettings storage = parseStorage(config);
     RuntimeConfig.FullInventoryBehavior inventoryBehavior;
@@ -226,6 +231,7 @@ public final class ConfigManager {
         databaseDrain,
         alerts,
         new RuntimeConfig.BackupSettings(backupEnabled, backupKeepDays),
+        historyKeepDays,
         config.getBoolean("debug", false));
   }
 

@@ -6,7 +6,7 @@ Economía secundaria por tiempo de sesión para Paper 1.21.x y Java 21.
 
 NovaGems concede por defecto 10 gemas por cada ciclo completo de 10 minutos de la conexión actual. Usa `System.nanoTime()`, conserva el excedente entre ciclos y admite ciclos ilimitados. Al salir, ser expulsado o detenerse el plugin se hace una última liquidación con el instante real: todo ciclo ya completado se envía a persistencia; el resto incompleto se descarta. Nunca se consulta ni se importa el playtime histórico de Minecraft.
 
-También concede gemas por PvP: cada jugador que elimine a otro jugador recibe `rewards.kills.gems-per-kill` (por defecto 10), hasta `rewards.kills.daily-limit` eliminaciones por día (por defecto 10; el contador vive en memoria y se reinicia si el servidor se reinicia). Cada eliminación solo cuenta si la víctima es distinta de las ya eliminadas ese mismo día — matar repetidamente al mismo jugador no otorga más recompensa, para evitar el farmeo de kills. Ningún saldo puede superar `economy.max-balance` (por defecto 10,000,000): las ganancias que lo superarían se recortan en el momento de aplicarse.
+También concede gemas por PvP: cada jugador que elimine a otro jugador recibe `rewards.kills.gems-per-kill` (por defecto 10), hasta `rewards.kills.daily-limit` eliminaciones por día (por defecto 10; el contador se guarda en la base de datos, así que un reinicio a mitad del día no lo reinicia). Cada eliminación solo cuenta si la víctima es distinta de las ya eliminadas ese mismo día — matar repetidamente al mismo jugador no otorga más recompensa, para evitar el farmeo de kills. Ningún saldo puede superar `economy.max-balance` (por defecto 10,000,000): las ganancias que lo superarían se recortan en el momento de aplicarse, y el historial registra lo realmente acreditado. `/novagems set` también respeta el tope.
 
 El `ActivityGuard` conservador usa memoria fija, ingesta O(1) y evalúa como máximo cada 10 segundos. Sólo pausa tras una ventana prolongada con patrones artificiales extraordinariamente repetitivos. Caminar, construir, abrir inventarios o conversar aportan evidencia legítima y evitan falsos positivos. No sanciona ni ejecuta comandos.
 
@@ -70,6 +70,10 @@ Todos los placeholders leen caché O(1) y nunca hacen SQL:
 
 SQLite es el valor inicial y usa WAL, `synchronous=FULL`, foreign keys y `busy_timeout`. MySQL/MariaDB usa HikariCP. El esquema v5 migra aditivamente desde v1/v2/v3/v4 sin alterar balances, acumulados o transacciones; añade estado durable para notificaciones de rewards recuperadas. Las filas históricas se marcan como ya notificadas para impedir avisos retroactivos. Los journals v1.1.1 se leen con su timestamp como semilla de migración; todas las capturas nuevas usan formato 2.
 
+### Depuración del historial
+
+El historial de movimientos crece una fila por jugador en cada ciclo. `history.keep-days` (por defecto `0`, conservar todo; mínimo 30) borra cada 6 horas los movimientos ya cerrados más viejos que ese plazo. No cambia saldos ni acumulados, y nunca toca entregas pendientes, revisiones manuales ni avisos de recompensa sin enviar.
+
 ### Respaldos automáticos
 
 Con SQLite, NovaGems guarda una copia de la base de datos una vez al día en `plugins/NovaGems/backups/novagems-AAAA-MM-DD.db` y conserva los últimos 7 días (`backup.keep-days`). La copia se hace con el servidor encendido y sin frenar el juego; cada respaldo es un archivo autónomo. Si una copia falla se avisa en consola (y por Discord si está configurado) y se reintenta en la siguiente revisión, una hora después.
@@ -80,32 +84,22 @@ Todos los parámetros de conexión, pool, colas y caché se comparan durante rel
 
 ## Recarga y tienda
 
-`/novagems admin reload` primero parsea y valida candidatos completos de `config.yml`, `messages.yml` y `shop.yml`; sólo después intercambia las tres instantáneas. Una reward individual inválida se omite con WARN; un YAML estructuralmente inválido rechaza el candidato. Las sesiones siguen vivas.
+`/novagems reload` primero parsea y valida candidatos completos de `config.yml`, `messages.yml` y `shop.yml`; sólo después intercambia las tres instantáneas. Una reward individual inválida se omite con WARN; un YAML estructuralmente inválido rechaza el candidato. Las sesiones siguen vivas.
 
 La tienda admite tamaños de 9 a 54 en múltiplos de 9 cuando sus slots configurados son válidos. Incluye cabeza del jugador, countdown real, categorías opcionales, navegación configurable, confirmación de 27 slots y conservación de página/categoría. Un GUI obsoleto se refresca antes de aceptar una compra.
 
 ## Operación
 
-La salud del storage, recovery y journal continúa registrándose en consola. Los comandos públicos de diagnóstico y revisión fueron retirados de la interfaz. Rewards con `price: 0` se deshabilitan: el mínimo es 1. El apagado usa timeouts separados de 5 segundos para journal y DB y reporta de forma SEVERE cualquier captura no confirmada.
+La salud del storage, recovery y journal continúa registrándose en consola. El diagnóstico y la revisión están en `/novagems status`, `review` y `recovery`, sólo para operadores. Rewards con `price: 0` se deshabilitan: el mínimo es 1. El apagado usa timeouts separados de 5 segundos para journal y DB y reporta de forma SEVERE cualquier captura no confirmada.
 
-## Fly
-
-`plugins/NovaGems/fly.yml` (se crea solo al iniciar) controla el sistema de vuelo:
-
-- Mantiene el `/fly` tras `/home`, `/warp`, `/tp`, carteles-elevador, portales, barcos/caballos,
-  muerte y cambio de modo de juego. Al entrar se activa a todo el que tenga el permiso.
-- Se quita al pegar o recibir un golpe de otro jugador (`combat.tag-seconds`, igual que
-  DeluxeCombat) y en `blocked-worlds` / `blocked-regions` (WorldGuard); vuelve solo al terminar.
-- Con LuckPerms, quien tiene fly temporal (comprado o por rango temporal) ve el tiempo restante
-  arriba de la hotbar; al llegar a cero pierde fly y permiso y cae lento hasta tocar el suelo.
-- `novagems.fly.bypass` (OP por defecto) ignora combate y zonas. Se recarga con `/novagems reload`.
+## Compras temporales
 
 Las compras temporales de `shop.yml` usan `accumulate`: comprar otra vez suma días en vez de
 fallar (LuckPerms, por defecto, rechaza un permiso temporal repetido).
 
 ## Alertas de Discord
 
-Las alertas son opcionales y nunca controlan una mutación económica. Se envían en un worker daemon con cola acotada, timeout y deduplicación; una caída de Discord no bloquea Paper, recovery ni shutdown. Configura una webhook nueva únicamente en `plugins/NovaGems/config.yml` y reinicia o ejecuta `/novagems admin reload`:
+Las alertas son opcionales y nunca controlan una mutación económica. Se envían en un worker daemon con cola acotada, timeout y deduplicación; una caída de Discord no bloquea Paper, recovery ni shutdown. Configura una webhook nueva únicamente en `plugins/NovaGems/config.yml` y reinicia o ejecuta `/novagems reload`:
 
 ```yaml
 alerts:

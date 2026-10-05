@@ -63,17 +63,17 @@ Instalar y probar cada distribución por separado. Nunca colocar ambos JAR en `p
 - [ ] MySQL: desconectar y reconectar la DB.
 - [ ] MySQL: completar reward durante outage y recuperar exactamente una vez.
 - [ ] MySQL: intentar purchase durante outage y comprobar orden/bloqueo seguro.
-- [ ] MySQL: `admin give` con conexión ambigua después de COMMIT y reconciliar sin duplicar.
+- [ ] MySQL: `/novagems give` con conexión ambigua después de COMMIT y reconciliar sin duplicar.
 - [ ] MySQL: ejecutar recovery con backlog mixto y validar `accountSequence`.
 
 ## Operación general
 
 - [ ] `/novagems`, `/novagems balance`, `/novagems help`, PlaceholderAPI, GUI y categorías.
 - [ ] Confirmar que usuarios normales no ven `admin` en tab completion y que sólo OP puede ejecutarlo.
-- [ ] `/novagems admin status`, `review` y `recovery`; confirmar la doble ejecución requerida para resolver una revisión.
+- [ ] `/novagems status`, `review` y `recovery`; confirmar la doble ejecución requerida para resolver una revisión.
 - [ ] Configurar una webhook de staging nueva y provocar una alerta controlada sin bloquear el hilo principal.
 - [ ] ActivityGuard con movimiento, construcción, inventario y chat normales.
 - [ ] Escenarios de carga de 100, 250 y 500 jugadores.
 - [ ] Observar TPS, MSPT, GC, latencia DB, journal queue y recovery pending durante carga.
-- [ ] Confirmar en `/novagems admin status` y consola la salud de storage/journal, recovery pendiente, manual review, cola webhook y cualquier cierre incompleto.
+- [ ] Confirmar en `/novagems status` y consola la salud de storage/journal, recovery pendiente, manual review, cola webhook y cualquier cierre incompleto.
 - [ ] Revisar logs: sin credenciales, sin spam de retries y sin warnings de drivers/classloader.

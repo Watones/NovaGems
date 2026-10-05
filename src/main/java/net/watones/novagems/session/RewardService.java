@@ -49,7 +49,7 @@ public final class RewardService {
       Player player = Bukkit.getPlayer(uuid);
       if (player == null || !player.isOnline()) return;
       wallets.claimRewardNotification(uuid).whenComplete((claimed, error) -> {
-        if (error != null || claimed.isEmpty()) return;
+        if (error != null || claimed.isEmpty() || claimed.orElseThrow().amount() <= 0) return;
         Bukkit.getScheduler().runTask(plugin, () -> notifyPlayer(uuid, claimed.orElseThrow()));
       });
     });

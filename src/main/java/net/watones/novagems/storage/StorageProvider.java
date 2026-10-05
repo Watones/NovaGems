@@ -71,6 +71,16 @@ public interface StorageProvider extends AutoCloseable {
     return 0;
   }
 
+  /**
+   * Deletes settled ledger rows created before {@code cutoffMillis}. Rows that still drive a
+   * delivery, a manual review or an unsent reward notice are never touched; balances are unaffected.
+   * {@code keep} lists operations that must survive regardless: a row is what makes replaying its
+   * recovery record a no-op.
+   */
+  default int pruneTransactionsBefore(long cutoffMillis, Set<UUID> keep) throws Exception {
+    return 0;
+  }
+
   /** Whether {@link #snapshotTo} can copy the live database to a standalone file. */
   default boolean supportsSnapshot() {
     return false;

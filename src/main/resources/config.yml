@@ -55,6 +55,12 @@ backup:
   enabled: true
   keep-days: 7
 
+# El historial de movimientos crece sin parar (una fila por jugador cada ciclo). Con un número
+# de días aquí, los movimientos ya cerrados más viejos que eso se borran solos; los saldos no
+# cambian. 0 = conservar todo. Mínimo 30. Se recarga en caliente.
+history:
+  keep-days: 0
+
 notifications:
   reward:
     chat: false

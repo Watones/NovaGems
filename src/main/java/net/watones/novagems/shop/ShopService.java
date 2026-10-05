@@ -30,6 +30,7 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 public final class ShopService {
   private static final int MAX_PENDING_NOTICES = 2048;
+  private static final int DELIVERED_MARK_ATTEMPTS = 5;
   private static final long PENDING_NOTICE_NANOS = java.time.Duration.ofSeconds(5).toNanos();
   private final JavaPlugin plugin;
   private final ShopConfig config;
@@ -428,10 +429,12 @@ public final class ShopService {
       showResult(player, preflight, reward, totalPrice, page, category);
       return;
     }
-    int processingSlot = reward.quantitySelectable() ? 20 : 15;
-    player
-        .getOpenInventory()
-        .setItem(processingSlot, named(Material.CLOCK, "<yellow>Procesando…", List.of()));
+    Inventory openMenu = player.getOpenInventory().getTopInventory();
+    if (openMenu.getHolder() instanceof QuantityMenuHolder) {
+      openMenu.setItem(20, named(Material.CLOCK, "<yellow>Procesando…", List.of()));
+    } else if (openMenu.getHolder() instanceof ConfirmMenuHolder) {
+      openMenu.setItem(15, named(Material.CLOCK, "<yellow>Procesando…", List.of()));
+    }
     wallets
         .debitForDelivery(
             player.getUniqueId(),
@@ -481,14 +484,16 @@ public final class ShopService {
       showResult(player, result, reward, chargedAmount, page, category);
       return;
     }
-    if (!player.isOnline()) {
+    // Re-resolve: after a quick relog the captured Player is a dead entity whose inventory is gone.
+    Player online = Bukkit.getPlayer(player.getUniqueId());
+    if (online == null) {
       gate.unlock(player.getUniqueId());
       plugin
           .getLogger()
           .info("Entrega " + charged.operationId() + " pendiente hasta la próxima conexión");
       return;
     }
-    finishDelivery(player, reward, charged.operationId(), page, category, quantity, chargedAmount);
+    finishDelivery(online, reward, charged.operationId(), page, category, quantity, chargedAmount);
   }
 
   public void recoverPending(Player player) {
@@ -629,9 +634,10 @@ public final class ShopService {
                             if (player.isOnline()) recoverPending(player);
                             return;
                           }
+                          Player online = Bukkit.getPlayer(player.getUniqueId());
                           DeliveryOutcome outcome =
-                              player.isOnline()
-                                  ? deliver(player, reward, operationId, quantity)
+                              online != null
+                                  ? deliver(online, reward, operationId, quantity)
                                   : new DeliveryOutcome(
                                       PurchaseResult.DELIVERY_FAILED,
                                       true,
@@ -660,9 +666,7 @@ public final class ShopService {
       long chargedAmount) {
     UUID playerId = player.getUniqueId();
     if (outcome.result() == PurchaseResult.SUCCESS) {
-      wallets
-          .markDelivery(operationId, TransactionStatus.DELIVERED, null)
-          .whenComplete((ignored, error) -> logDeliveryAuditFailure(operationId, error));
+      markDelivered(operationId, 1);
       return;
     }
     if (!outcome.refundable()) {
@@ -691,6 +695,26 @@ public final class ShopService {
         .whenComplete((ignored, error) -> logDeliveryAuditFailure(operationId, error));
   }
 
+  /**
+   * The reward is already in the player's hands, so a failed write here must not be the end of it:
+   * the purchase would stay "processing" until the next restart and then land in manual review.
+   */
+  private void markDelivered(UUID operationId, int attempt) {
+    wallets
+        .markDelivery(operationId, TransactionStatus.DELIVERED, null)
+        .whenComplete(
+            (ignored, error) -> {
+              if (error == null) return;
+              if (attempt >= DELIVERED_MARK_ATTEMPTS || !plugin.isEnabled()) {
+                logDeliveryAuditFailure(operationId, error);
+                return;
+              }
+              Bukkit.getScheduler()
+                  .runTaskLater(
+                      plugin, () -> markDelivered(operationId, attempt + 1), 100L * attempt);
+            });
+  }
+
   private void continueSafeRefund(
       Player player,
       net.watones.novagems.economy.EconomyOperation operation,
@@ -713,9 +737,9 @@ public final class ShopService {
     try {
       for (RewardAction action : reward.actions()) {
         if (!(action instanceof RewardAction.Item item)) continue;
-        ItemStack toGive = item.value().clone();
-        if (reward.quantitySelectable()) toGive.setAmount(quantity);
-        Map<Integer, ItemStack> left = player.getInventory().addItem(toGive);
+        int amount = reward.quantitySelectable() ? quantity : item.value().getAmount();
+        Map<Integer, ItemStack> left =
+            player.getInventory().addItem(legalStacks(item.value(), amount));
         delivered = true;
         if (!left.isEmpty()) {
           if (runtimeConfig.current().fullInventoryBehavior()
@@ -778,6 +802,21 @@ public final class ShopService {
       return new DeliveryOutcome(
           PurchaseResult.DELIVERY_FAILED, !delivered && !irreversibleAttempted, error);
     }
+  }
+
+  /**
+   * Inventory#addItem fills an empty slot up to the inventory's limit, not the item's, so a single
+   * over-sized stack would hand out e.g. nine totems stacked in one slot.
+   */
+  private static ItemStack[] legalStacks(ItemStack template, int amount) {
+    int maxStack = Math.max(1, template.getMaxStackSize());
+    List<ItemStack> stacks = new java.util.ArrayList<>();
+    for (int remaining = amount; remaining > 0; remaining -= maxStack) {
+      ItemStack stack = template.clone();
+      stack.setAmount(Math.min(maxStack, remaining));
+      stacks.add(stack);
+    }
+    return stacks.toArray(ItemStack[]::new);
   }
 
   private void logDeliveryAuditFailure(UUID operationId, Throwable error) {

@@ -209,6 +209,67 @@ class SQLiteStorageProviderTest {
   }
 
   @Test
+  void creditClippedByBalanceCapIsRecordedAsWhatWasReceived(@TempDir Path temp) throws Exception {
+    SQLiteStorageProvider storage = new SQLiteStorageProvider(temp.resolve("cap.db"));
+    storage.initialize();
+    storage.configureMaxBalance(100);
+    UUID player = UUID.randomUUID();
+    storage.loadOrCreate(player, "Antonio");
+    UUID first = UUID.randomUUID();
+    UUID clipped = UUID.randomUUID();
+    storage.applyOperation(credit(first, player, 90, 1));
+    storage.applyOperation(credit(clipped, player, 30, 2));
+    assertThat(storage.loadAccount(player).orElseThrow().balance()).isEqualTo(100);
+    assertThat(storage.findTransaction(clipped).orElseThrow().amount()).isEqualTo(10);
+
+    UUID set = UUID.randomUUID();
+    storage.applyOperation(new EconomyOperation(set, player, MutationKind.SET, 5_000,
+        TransactionType.ADMIN_SET, "ADMIN_SET", "admin:CONSOLE", TransactionStatus.COMMITTED,
+        Instant.now(), 3));
+    assertThat(storage.loadAccount(player).orElseThrow().balance()).isEqualTo(100);
+    storage.close();
+  }
+
+  @Test
+  void pruningDropsOnlyOldSettledRowsAndKeepsBalances(@TempDir Path temp) throws Exception {
+    SQLiteStorageProvider storage = new SQLiteStorageProvider(temp.resolve("prune.db"));
+    storage.initialize();
+    UUID player = UUID.randomUUID();
+    storage.loadOrCreate(player, "Antonio");
+    Instant old = Instant.now().minusSeconds(86_400L * 60);
+    UUID oldCredit = UUID.randomUUID();
+    UUID oldPending = UUID.randomUUID();
+    UUID oldUnnotified = UUID.randomUUID();
+    UUID recent = UUID.randomUUID();
+    storage.applyOperation(new EconomyOperation(oldCredit, player, MutationKind.CREDIT, 100,
+        TransactionType.ADMIN_GIVE, "seed", "admin:CONSOLE", TransactionStatus.COMMITTED, old, 1));
+    storage.applyOperation(new EconomyOperation(oldPending, player, MutationKind.DEBIT, 25,
+        TransactionType.SHOP_PURCHASE, "SHOP_PURCHASE", "reward",
+        TransactionStatus.DELIVERY_PENDING, old, 2));
+    storage.applyOperation(new EconomyOperation(oldUnnotified, player, MutationKind.CREDIT, 10,
+        TransactionType.PLAYTIME_REWARD, "SESSION_INTERVAL", "session", TransactionStatus.COMMITTED,
+        old, 3));
+    storage.applyOperation(credit(recent, player, 5, 4));
+
+    long cutoff = Instant.now().minusSeconds(86_400L * 30).toEpochMilli();
+    assertThat(storage.pruneTransactionsBefore(cutoff, java.util.Set.of(oldCredit))).isZero();
+    assertThat(storage.findTransaction(oldCredit)).isPresent();
+    assertThat(storage.pruneTransactionsBefore(cutoff, java.util.Set.of())).isEqualTo(1);
+    assertThat(storage.findTransaction(oldCredit)).isEmpty();
+    assertThat(storage.findTransaction(oldPending)).isPresent();
+    assertThat(storage.findTransaction(oldUnnotified)).isPresent();
+    assertThat(storage.findTransaction(recent)).isPresent();
+    assertThat(storage.loadAccount(player).orElseThrow().balance()).isEqualTo(90);
+    storage.close();
+  }
+
+  private static EconomyOperation credit(UUID operationId, UUID player, long amount, long sequence) {
+    return new EconomyOperation(operationId, player, MutationKind.CREDIT, amount,
+        TransactionType.ADMIN_GIVE, "seed", "admin:CONSOLE", TransactionStatus.COMMITTED,
+        Instant.now(), sequence);
+  }
+
+  @Test
   void leaderboardHistoryAndBalancesSurviveProviderRestart(@TempDir Path temp) throws Exception {
     Path database = temp.resolve("restart.db");
     UUID alice = UUID.randomUUID();

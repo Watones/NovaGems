@@ -32,7 +32,7 @@ public final class NovaGemsExpansion extends PlaceholderExpansion {
 
   @Override
   public @NotNull String getVersion() {
-    return "1.1.1";
+    return "1.1.4";
   }
 
   @Override

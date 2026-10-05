@@ -3,15 +3,12 @@ package net.watones.novagems.command;
 import java.time.Duration;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.Set;
-import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import net.watones.novagems.alert.DiscordWebhookAlertService;
@@ -60,7 +57,6 @@ public final class NovaGemsCommand implements CommandExecutor, TabCompleter {
   private final DiscordWebhookAlertService alerts;
   private final Consumer<RuntimeConfig.AlertSettings> alertReload;
   private final Map<ConfirmationKey, Long> confirmations = new ConcurrentHashMap<>();
-  private final List<Callable<Runnable>> extraReloads = new CopyOnWriteArrayList<>();
 
   public NovaGemsCommand(
       JavaPlugin plugin,
@@ -291,7 +287,12 @@ public final class NovaGemsCommand implements CommandExecutor, TabCompleter {
         else if (result.success()) {
           messages.send(sender, "admin-" + operation + "-success", Map.of(
               "player", account.lastName(),
-              "amount", Formatters.number(amount),
+              // A give or set clipped by the balance cap reports what the account really got.
+              "amount", Formatters.number(switch (operation) {
+                case "give" -> result.balanceAfter() - result.balanceBefore();
+                case "set" -> result.balanceAfter();
+                default -> amount;
+              }),
               "balance", Formatters.number(result.balanceAfter())));
         } else if (result.status() == EconomyResult.Status.ADMIN_PENDING) {
           sendAdministrativePending(sender, account.lastName(), result.operationId(), false);
@@ -318,14 +319,6 @@ public final class NovaGemsCommand implements CommandExecutor, TabCompleter {
         "operation", operationId.toString().substring(0, 8)));
   }
 
-  /**
-   * Extra file reloaded by /novagems reload. The callable parses off the main thread and throws to
-   * reject the whole reload; the Runnable it returns applies the result on the main thread.
-   */
-  public void addReloadStep(Callable<Runnable> step) {
-    extraReloads.add(step);
-  }
-
   private void reload(CommandSender sender) {
     Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> parseAndApplyReload(sender));
   }
@@ -336,8 +329,6 @@ public final class NovaGemsCommand implements CommandExecutor, TabCompleter {
       var messageCandidate = messages.parseCandidate();
       var shopCandidate = shopConfig.validateSafety(
           shopConfig.parseCandidate(), runtimeCandidate.allowMultipleIrreversibleActions());
-      List<Runnable> extraApplies = new ArrayList<>(extraReloads.size());
-      for (Callable<Runnable> step : extraReloads) extraApplies.add(step.call());
       boolean storageChanged =
           !runtimeCandidate.storage().equals(activeStorageSettings)
               || !runtimeCandidate.queues().equals(activeQueueLimits)
@@ -356,7 +347,6 @@ public final class NovaGemsCommand implements CommandExecutor, TabCompleter {
         messages.swap(messageCandidate);
         shopConfig.swap(shopCandidate);
         alertReload.accept(runtimeCandidate.alerts());
-        extraApplies.forEach(Runnable::run);
         messages.send(sender, "reload-success");
         if (storageChanged) messages.send(sender, "storage-restart");
         plugin.getLogger().info("Canjes recargados: " + shop.rewardCount());

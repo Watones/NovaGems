@@ -21,6 +21,7 @@ public record RuntimeConfig(
     int databaseDrainTimeoutSeconds,
     AlertSettings alerts,
     BackupSettings backup,
+    int historyKeepDays,
     boolean debug) {
   public String storageType() {
     return storage.type();
@@ -48,6 +49,7 @@ public record RuntimeConfig(
         databaseDrainTimeoutSeconds,
         alerts,
         backup,
+        historyKeepDays,
         debug);
   }
 
