@@ -309,7 +309,12 @@ public final class WalletService implements AutoCloseable {
     int actualProgress = 0;
     boolean storageFailed = false;
     List<CompletableFuture<Void>> removals = new ArrayList<>();
-    if (!operations.isEmpty()) health = StorageHealth.RECOVERING;
+    // Only a storage that was actually unhealthy is "recovering". A healthy one replaying its
+    // journal (often just a purchase waiting for an offline player) must not turn away every
+    // other player's purchase for the length of each pass.
+    if (!operations.isEmpty() && health != StorageHealth.HEALTHY) {
+      health = StorageHealth.RECOVERING;
+    }
     for (EconomyOperation operation : operations) {
       restoreAdministrativePending(operation);
       try {
@@ -1055,6 +1060,14 @@ public final class WalletService implements AutoCloseable {
         });
   }
 
+  public CompletableFuture<Void> forgetDailyKill(UUID killer, UUID victim, String day) {
+    return submitIo(
+        () -> {
+          storage.forgetDailyKill(killer, victim, day);
+          return null;
+        });
+  }
+
   public CompletableFuture<Integer> pruneDailyKillsBefore(String day) {
     return submitIo(() -> storage.pruneDailyKillsBefore(day));
   }
@@ -1085,6 +1098,11 @@ public final class WalletService implements AutoCloseable {
   public CompletableFuture<List<GemTransaction>> deliveryFailures(int page, int pageSize) {
     int offset = safeOffset(page, pageSize);
     return submitIo(() -> storage.deliveryFailures(offset, pageSize));
+  }
+
+  public CompletableFuture<List<GemTransaction>> manualReviews(int page, int pageSize) {
+    int offset = safeOffset(page, pageSize);
+    return submitIo(() -> storage.manualReviews(offset, pageSize));
   }
 
   public CompletableFuture<Optional<GemTransaction>> transaction(UUID operationId) {
@@ -1234,6 +1252,22 @@ public final class WalletService implements AutoCloseable {
 
   public CompletableFuture<Optional<UUID>> findUuid(String name) {
     return submitIo(() -> storage.findUuidByName(name));
+  }
+
+  /** Accounts an admin may mean by {@code target}: a UUID names exactly one, a name may match several. */
+  public CompletableFuture<List<StorageProvider.AccountRef>> findAccounts(String target) {
+    return submitIo(
+        () -> {
+          UUID uuid;
+          try {
+            uuid = UUID.fromString(target);
+          } catch (IllegalArgumentException notUuid) {
+            return List.copyOf(storage.findAccountsByName(target));
+          }
+          return storage.loadAccount(uuid)
+              .map(account -> List.of(new StorageProvider.AccountRef(uuid, account.lastName())))
+              .orElseGet(List::of);
+        });
   }
 
   public StorageHealth health() {

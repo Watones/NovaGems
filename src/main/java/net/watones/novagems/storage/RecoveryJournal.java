@@ -105,6 +105,31 @@ public class RecoveryJournal implements AutoCloseable {
     Path target = path(operation.operationId());
     if (pending.containsKey(operation.operationId())) return;
     Path temporary = directory.resolve(operation.operationId() + ".tmp");
+    boolean moved = false;
+    try {
+      write(operation, temporary);
+      moveIntoPlace(temporary, target);
+      moved = true;
+      forceDirectory();
+    } catch (IOException | RuntimeException failure) {
+      // The caller is told this store failed and may retry under a new operation id. A readable
+      // record left behind would be adopted by the next reconcile and applied as well.
+      discard(temporary, failure);
+      if (moved) discard(target, failure);
+      throw failure;
+    }
+    index(operation);
+  }
+
+  private void discard(Path path, Exception cause) {
+    try {
+      Files.deleteIfExists(path);
+    } catch (IOException | RuntimeException cleanupFailure) {
+      cause.addSuppressed(cleanupFailure);
+    }
+  }
+
+  private void write(EconomyOperation operation, Path temporary) throws IOException {
     try (FileOutputStream file = new FileOutputStream(temporary.toFile());
         DataOutputStream output = new DataOutputStream(new BufferedOutputStream(file))) {
       output.writeInt(MAGIC);
@@ -122,9 +147,6 @@ public class RecoveryJournal implements AutoCloseable {
       output.flush();
       file.getChannel().force(true);
     }
-    moveIntoPlace(temporary, target);
-    forceDirectory();
-    index(operation);
   }
 
   public synchronized void remove(UUID operationId) throws IOException {

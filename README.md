@@ -6,7 +6,7 @@ Economía secundaria por tiempo de sesión para Paper 1.21.x y Java 21.
 
 NovaGems concede por defecto 10 gemas por cada ciclo completo de 10 minutos de la conexión actual. Usa `System.nanoTime()`, conserva el excedente entre ciclos y admite ciclos ilimitados. Al salir, ser expulsado o detenerse el plugin se hace una última liquidación con el instante real: todo ciclo ya completado se envía a persistencia; el resto incompleto se descarta. Nunca se consulta ni se importa el playtime histórico de Minecraft.
 
-También concede gemas por PvP: cada jugador que elimine a otro jugador recibe `rewards.kills.gems-per-kill` (por defecto 10), hasta `rewards.kills.daily-limit` eliminaciones por día (por defecto 10; el contador se guarda en la base de datos, así que un reinicio a mitad del día no lo reinicia). Cada eliminación solo cuenta si la víctima es distinta de las ya eliminadas ese mismo día — matar repetidamente al mismo jugador no otorga más recompensa, para evitar el farmeo de kills. Ningún saldo puede superar `economy.max-balance` (por defecto 10,000,000): las ganancias que lo superarían se recortan en el momento de aplicarse, y el historial registra lo realmente acreditado. `/novagems set` también respeta el tope.
+También concede gemas por PvP: cada jugador que elimine a otro jugador recibe `rewards.kills.gems-per-kill` (por defecto 10), hasta `rewards.kills.daily-limit` eliminaciones por día (por defecto 10; el contador se guarda en la base de datos, así que un reinicio a mitad del día no lo reinicia). Cada eliminación solo cuenta si la víctima es distinta de las ya eliminadas ese mismo día — matar repetidamente al mismo jugador no otorga más recompensa, para evitar el farmeo de kills. Ningún saldo puede superar `economy.max-balance` (por defecto 10,000,000): las ganancias que lo superarían se recortan en el momento de aplicarse, y el historial registra lo realmente acreditado. `/novagems set` también respeta el tope. La única excepción es el reembolso de una compra, que siempre devuelve el importe completo.
 
 El `ActivityGuard` conservador usa memoria fija, ingesta O(1) y evalúa como máximo cada 10 segundos. Sólo pausa tras una ventana prolongada con patrones artificiales extraordinariamente repetitivos. Caminar, construir, abrir inventarios o conversar aportan evidencia legítima y evitan falsos positivos. No sanciona ni ejecuta comandos.
 
@@ -46,7 +46,7 @@ El slim necesita acceso al repositorio Maven configurado por Paper en el primer 
 - `/gemas top` — muestra el top 10 de jugadores con más gemas.
 - `/gemas help` — muestra la ayuda en forma de lista.
 - `/novagems help` — muestra la ayuda administrativa. Sólo operadores.
-- `/novagems give|take|set <jugador> <cantidad>` — sólo operadores.
+- `/novagems give|take|set <jugador> <cantidad>` — sólo operadores. `<jugador>` admite nombre o UUID; si dos cuentas comparten el último nombre conocido, el comando no modifica ninguna y pide el UUID.
 - `/novagems reset <jugador>` — sólo operadores.
 - `/novagems reload` — sólo operadores.
 - `/novagems status` — estado compacto de economía, journal y webhook.
@@ -90,7 +90,7 @@ La tienda admite tamaños de 9 a 54 en múltiplos de 9 cuando sus slots configur
 
 ## Operación
 
-La salud del storage, recovery y journal continúa registrándose en consola. El diagnóstico y la revisión están en `/novagems status`, `review` y `recovery`, sólo para operadores. Rewards con `price: 0` se deshabilitan: el mínimo es 1. El apagado usa timeouts separados de 5 segundos para journal y DB y reporta de forma SEVERE cualquier captura no confirmada.
+La salud del storage, recovery y journal continúa registrándose en consola. El diagnóstico y la revisión están en `/novagems status`, `review` y `recovery`, sólo para operadores. Rewards con `price: 0` se deshabilitan: el mínimo es 1. El apagado usa timeouts de 5 segundos para journal y DB, con un máximo conjunto de 10 segundos, y reporta de forma SEVERE cualquier captura no confirmada.
 
 ## Compras temporales
 

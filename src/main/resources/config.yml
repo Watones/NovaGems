@@ -43,6 +43,7 @@ recovery:
     max-backoff-seconds: 300
 
 # Las operaciones ya capturadas sobreviven en recovery; no es necesario esperar una DB caída.
+# Entre las dos etapas el apagado espera como máximo 10 segundos en total. Se recarga en caliente.
 shutdown:
   journal-drain-timeout-seconds: 5
   database-drain-timeout-seconds: 5

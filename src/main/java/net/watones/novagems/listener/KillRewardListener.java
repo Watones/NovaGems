@@ -35,15 +35,29 @@ public final class KillRewardListener implements Listener {
     if (!settings.enabled()) return;
     UUID killerId = killer.getUniqueId();
     UUID victimId = event.getEntity().getUniqueId();
+    String day = tracker.todayKey();
     if (tracker.registerKill(killerId, victimId, settings.dailyLimit()) < 0) return;
     // Remember the pair before crediting: if the write loses a race with a restart the worst case
     // is one kill that could be earned again, never a gem that was paid twice.
-    wallets.recordDailyKill(killerId, victimId, tracker.todayKey());
-    wallets.credit(
-        killerId,
-        settings.gemsPerKill(),
-        TransactionType.KILL_REWARD,
-        "PLAYER_KILL",
-        "kill:" + victimId);
+    var recorded = wallets.recordDailyKill(killerId, victimId, day);
+    wallets
+        .credit(
+            killerId,
+            settings.gemsPerKill(),
+            TransactionType.KILL_REWARD,
+            "PLAYER_KILL",
+            "kill:" + victimId)
+        .whenComplete(
+            (result, error) -> {
+              // Captured for recovery still pays later. Anything else never will, so the kill
+              // must not keep using up the killer's daily allowance.
+              if (error == null && (result.success() || result.recoveryPending())) return;
+              // After the insert has run, whichever worker took it, and before the slot is
+              // free again in memory.
+              recorded
+                  .handle((ignored, recordError) -> null)
+                  .thenCompose(ignored -> wallets.forgetDailyKill(killerId, victimId, day))
+                  .whenComplete((ignored, forgetError) -> tracker.release(killerId, victimId, day));
+            });
   }
 }

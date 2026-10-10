@@ -98,6 +98,8 @@ public final class ShopConfig {
   }
 
   private ShopReward parseReward(String id, ConfigurationSection s, ShopLayout layout) {
+    // '@' separates the reward id from the quantity in a stored purchase reference.
+    if (id.contains("@")) throw new IllegalArgumentException("el id no puede contener '@'");
     int page = s.getInt("page", 1);
     if (page < 1 || page > 100) throw new IllegalArgumentException("page fuera de rango");
     int slot = s.getInt("slot", -1);
@@ -141,6 +143,21 @@ public final class ShopConfig {
     }
     boolean quantitySelectable = s.getBoolean("quantity-selectable", false);
     boolean quantityPanels = s.getBoolean("quantity-panels", false);
+    if (actions.stream().noneMatch(
+        action -> action instanceof RewardAction.Item || action instanceof RewardAction.Command)) {
+      throw new IllegalArgumentException("actions no entrega nada: falta un ITEM o un COMMAND");
+    }
+    if (!quantitySelectable) {
+      // The placeholder is only filled in for quantity purchases; left as literal text the
+      // command fails inside the other plugin while the purchase still counts as delivered.
+      for (RewardAction action : actions) {
+        if (action instanceof RewardAction.Command command
+            && command.value().contains("<quantity>")) {
+          throw new IllegalArgumentException(
+              "<quantity> en el COMMAND requiere quantity-selectable: true");
+        }
+      }
+    }
     if (quantitySelectable) {
       long scalableActions =
           actions.stream()
@@ -159,6 +176,11 @@ public final class ShopConfig {
             && !command.value().contains("<quantity>")) {
           throw new IllegalArgumentException(
               "quantity-selectable requiere <quantity> en el COMMAND: " + id);
+        }
+        // The chosen quantity is the number of units delivered, so the unit must be one item.
+        if (action instanceof RewardAction.Item item && item.value().getAmount() != 1) {
+          throw new IllegalArgumentException(
+              "quantity-selectable requiere amount: 1 en el ITEM: " + id);
         }
       }
     }

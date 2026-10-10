@@ -493,15 +493,21 @@ public final class ShopService {
           .info("Entrega " + charged.operationId() + " pendiente hasta la próxima conexión");
       return;
     }
+    if (online.isDead() && givesItems(reward)) {
+      // Stays pending; it is delivered as soon as the player respawns.
+      gate.unlock(player.getUniqueId());
+      messages.send(online, "purchase-after-respawn");
+      return;
+    }
     finishDelivery(online, reward, charged.operationId(), page, category, quantity, chargedAmount);
   }
 
   public void recoverPending(Player player) {
     for (var operation : wallets.pendingDeliveries(player.getUniqueId())) {
+      // No status means the storage thread settled it after the list above was copied.
       TransactionStatus status =
-          wallets
-              .pendingDeliveryStatus(operation.operationId())
-              .orElse(TransactionStatus.DELIVERY_PENDING);
+          wallets.pendingDeliveryStatus(operation.operationId()).orElse(null);
+      if (status == null) continue;
       if (status.needsSafeRefund()) {
         continueSafeRefund(player, operation, "DELIVERY_FAILURE_CONFIRMED");
         continue;
@@ -510,19 +516,18 @@ public final class ShopService {
       String rewardId = rewardIdFromReference(operation.reference());
       ShopReward reward = config.current().rewards().get(rewardId);
       if (reward == null) {
-        wallets
-            .markDelivery(
-                operation.operationId(),
-                TransactionStatus.DELIVERY_FAILED_SAFE,
-                "El canje ya no existe")
-            .thenRun(() -> continueSafeRefund(player, operation, "RECOVERY_REWARD_REMOVED"))
-            .exceptionally(
-                error -> {
-                  logDeliveryAuditFailure(operation.operationId(), error);
-                  return null;
-                });
+        failSafeAndRefund(player, operation, "El canje ya no existe", "RECOVERY_REWARD_REMOVED");
         continue;
       }
+      // Paid for several units, but the reward was reloaded as single-unit: delivering one for
+      // the price of many would be wrong, so give the gems back instead.
+      if (quantityFromReference(operation.reference()) > 1 && !reward.quantitySelectable()) {
+        failSafeAndRefund(
+            player, operation, "El canje ya no admite cantidad", "RECOVERY_REWARD_CHANGED");
+        continue;
+      }
+      // Items handed to a dead player vanish on respawn; the next recovery pass picks this up.
+      if (player.isDead() && givesItems(reward)) continue;
       if (!gate.tryLock(player.getUniqueId())) return;
       finishDelivery(
           player,
@@ -535,6 +540,38 @@ public final class ShopService {
     }
   }
 
+  private void failSafeAndRefund(
+      Player player,
+      net.watones.novagems.economy.EconomyOperation operation,
+      String error,
+      String reason) {
+    wallets
+        .markDelivery(operation.operationId(), TransactionStatus.DELIVERY_FAILED_SAFE, error)
+        .thenRun(() -> continueSafeRefund(player, operation, reason))
+        .exceptionally(
+            failure -> {
+              logDeliveryAuditFailure(operation.operationId(), failure);
+              return null;
+            });
+  }
+
+  private static boolean givesItems(ShopReward reward) {
+    return reward.actions().stream().anyMatch(RewardAction.Item.class::isInstance);
+  }
+
+  /** Called on respawn: hands over what was held back while the player was dead. */
+  public void recoverAfterRespawn(Player player) {
+    if (wallets.pendingDeliveries(player.getUniqueId()).isEmpty()) return;
+    UUID id = player.getUniqueId();
+    Bukkit.getScheduler()
+        .runTask(
+            plugin,
+            () -> {
+              Player online = Bukkit.getPlayer(id);
+              if (online != null) recoverPending(online);
+            });
+  }
+
   public boolean retryDelivery(UUID operationId) {
     var pending = wallets.pendingDelivery(operationId);
     if (pending.isEmpty()) return false;
@@ -542,13 +579,16 @@ public final class ShopService {
     if (player == null || !player.isOnline() || !gate.tryLock(player.getUniqueId())) return false;
     String rewardId = rewardIdFromReference(pending.get().reference());
     ShopReward reward = config.current().rewards().get(rewardId);
-    if (reward == null) {
+    // Same rule as recoverPending, which is what settles these: a removed reward, or one that no
+    // longer takes the quantity that was paid for, is refunded rather than delivered short.
+    if (reward == null
+        || (quantityFromReference(pending.get().reference()) > 1
+            && !reward.quantitySelectable())) {
       gate.unlock(player.getUniqueId());
       recoverPending(player);
       return true;
     }
-    TransactionStatus status =
-        wallets.pendingDeliveryStatus(operationId).orElse(TransactionStatus.DELIVERY_PENDING);
+    TransactionStatus status = wallets.pendingDeliveryStatus(operationId).orElse(null);
     if (status != TransactionStatus.DELIVERY_PENDING) {
       gate.unlock(player.getUniqueId());
       return false;
@@ -631,25 +671,40 @@ public final class ShopService {
                                 page,
                                 category);
                             logDeliveryAuditFailure(operationId, startError);
-                            if (player.isOnline()) recoverPending(player);
+                            // No immediate retry: against a failing database that is a tight
+                            // loop. The purchase stays pending and the periodic recovery pass
+                            // drives it again.
                             return;
                           }
                           Player online = Bukkit.getPlayer(player.getUniqueId());
+                          boolean reachable =
+                              online != null && !(online.isDead() && givesItems(reward));
                           DeliveryOutcome outcome =
-                              online != null
+                              reachable
                                   ? deliver(online, reward, operationId, quantity)
                                   : new DeliveryOutcome(
                                       PurchaseResult.DELIVERY_FAILED,
                                       true,
-                                      "El jugador se desconectó antes de la entrega");
+                                      "El jugador se desconectó o murió antes de la entrega");
                           persistDelivery(player, reward, operationId, outcome, chargedAmount);
                           gate.unlock(player.getUniqueId());
-                          PurchaseResult visible =
-                              outcome.result() == PurchaseResult.DELIVERY_FAILED
-                                      && !outcome.refundable()
-                                  ? PurchaseResult.MANUAL_REVIEW
-                                  : outcome.result();
-                          showResult(player, visible, reward, page, category);
+                          if (outcome.result() != PurchaseResult.SUCCESS
+                              && outcome.refundable()) {
+                            // Charged and now being refunded: say so, instead of the pre-charge
+                            // "nothing was charged" or the manual-review wording.
+                            playUiSound(player, runtimeConfig.current().shopSounds().failure());
+                            messages.send(
+                                player,
+                                outcome.result() == PurchaseResult.INVENTORY_FULL
+                                    ? "purchase-refunded-inventory"
+                                    : "purchase-refunded");
+                          } else {
+                            PurchaseResult visible =
+                                outcome.result() == PurchaseResult.DELIVERY_FAILED
+                                    ? PurchaseResult.MANUAL_REVIEW
+                                    : outcome.result();
+                            showResult(player, visible, reward, page, category);
+                          }
                           // Another purchase may still be queued behind this player's single
                           // delivery gate (e.g. several purchases piled up while storage was
                           // degraded); drain it now instead of waiting for the next periodic
@@ -734,6 +789,12 @@ public final class ShopService {
   private DeliveryOutcome deliver(Player player, ShopReward reward, UUID operationId, int quantity) {
     boolean delivered = false;
     boolean irreversibleAttempted = false;
+    // The purchase preflight ran before the charge, and a deferred delivery never ran it at all:
+    // check again now, while nothing has been handed out and a refund is still clean.
+    if (!inventoryFits(player, reward, quantity)) {
+      return new DeliveryOutcome(
+          PurchaseResult.INVENTORY_FULL, true, "Inventario lleno al momento de la entrega");
+    }
     try {
       for (RewardAction action : reward.actions()) {
         if (!(action instanceof RewardAction.Item item)) continue;
@@ -741,15 +802,9 @@ public final class ShopService {
         Map<Integer, ItemStack> left =
             player.getInventory().addItem(legalStacks(item.value(), amount));
         delivered = true;
-        if (!left.isEmpty()) {
-          if (runtimeConfig.current().fullInventoryBehavior()
-              == RuntimeConfig.FullInventoryBehavior.DROP) {
-            left.values()
-                .forEach(stack -> player.getWorld().dropItemNaturally(player.getLocation(), stack));
-          } else {
-            throw new IllegalStateException("El inventario cambió durante la entrega");
-          }
-        }
+        // Whatever did not fit is dropped at the player's feet: a paid item is never discarded.
+        left.values()
+            .forEach(stack -> player.getWorld().dropItemNaturally(player.getLocation(), stack));
       }
       for (RewardAction action : reward.actions()) {
         if (!(action instanceof RewardAction.Command command)) continue;
@@ -969,8 +1024,15 @@ public final class ShopService {
     List<String> categories = new java.util.ArrayList<>();
     categories.add("all");
     categories.addAll(snapshot.categories());
-    int index = categories.indexOf(current);
-    return categories.get((index + 1 + categories.size()) % categories.size());
+    // The holder stores the category lower-cased, whatever its spelling in shop.yml.
+    int index = -1;
+    for (int i = 0; i < categories.size(); i++) {
+      if (categories.get(i).equalsIgnoreCase(current)) {
+        index = i;
+        break;
+      }
+    }
+    return categories.get((index + 1) % categories.size());
   }
 
   private String categoryLabel(String category) {

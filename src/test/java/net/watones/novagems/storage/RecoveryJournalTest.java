@@ -32,6 +32,27 @@ class RecoveryJournalTest {
   }
 
   @Test
+  void failedStoreLeavesNoRecordForALaterReconcileToAdopt(@TempDir Path temp) throws Exception {
+    Path directory = temp.resolve("failed-store");
+    RecoveryJournal journal = new RecoveryJournal(directory);
+    journal.initialize();
+    EconomyOperation operation = operation();
+    // A non-empty directory where the record should land makes the final rename fail after the
+    // temporary file was already written and synced.
+    Path obstacle = directory.resolve(operation.operationId() + ".op");
+    Files.createDirectories(obstacle.resolve("blocker"));
+
+    org.assertj.core.api.Assertions.assertThatThrownBy(() -> journal.store(operation))
+        .isInstanceOf(java.io.IOException.class);
+    assertThat(directory.resolve(operation.operationId() + ".tmp")).doesNotExist();
+
+    Files.delete(obstacle.resolve("blocker"));
+    Files.delete(obstacle);
+    journal.initialize();
+    assertThat(journal.loadAll()).isEmpty();
+  }
+
+  @Test
   void recordsAreDurableReadableAndIdempotentlyRemoved(@TempDir Path temp) throws Exception {
     RecoveryJournal journal = new RecoveryJournal(temp.resolve("recovery"));
     journal.initialize();

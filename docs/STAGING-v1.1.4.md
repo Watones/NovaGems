@@ -26,9 +26,9 @@ Instalar y probar cada distribución por separado. Nunca colocar ambos JAR en `p
 
 ## Sesión y recovery
 
-- [ ] Desconectar a 29:59 y confirmar 0 gemas.
-- [ ] Completar 30:00.001 online y recibir +10 con un aviso.
-- [ ] Completar 60 minutos y recibir +20 exactamente una vez.
+- [ ] Desconectar a 9:59 y confirmar 0 gemas.
+- [ ] Completar 10:00.001 online y recibir +10 con el sonido de aviso (el mensaje de chat viene apagado).
+- [ ] Completar 60 minutos y recibir +60 en seis ciclos, cada uno exactamente una vez.
 - [ ] Entrar con una cuenta veterana de 4,000 horas históricas y confirmar 0 retroactivo.
 - [ ] Completar rewards con DB caída, restaurar DB online y recibir un aviso recuperado.
 - [ ] Recuperar tres rewards estando offline; reconectar y recibir un único resumen, sin repetirlo al siguiente login.
@@ -68,8 +68,8 @@ Instalar y probar cada distribución por separado. Nunca colocar ambos JAR en `p
 
 ## Operación general
 
-- [ ] `/novagems`, `/novagems balance`, `/novagems help`, PlaceholderAPI, GUI y categorías.
-- [ ] Confirmar que usuarios normales no ven `admin` en tab completion y que sólo OP puede ejecutarlo.
+- [ ] `/gemas`, `/gemas bal`, `/gemas top`, `/novagems help`, PlaceholderAPI, GUI y categorías.
+- [ ] Confirmar que usuarios normales no reciben sugerencias de `/novagems` en tab completion, que sólo OP puede ejecutarlo y que `/novagems:gemas` abre la tienda.
 - [ ] `/novagems status`, `review` y `recovery`; confirmar la doble ejecución requerida para resolver una revisión.
 - [ ] Configurar una webhook de staging nueva y provocar una alerta controlada sin bloquear el hilo principal.
 - [ ] ActivityGuard con movimiento, construcción, inventario y chat normales.

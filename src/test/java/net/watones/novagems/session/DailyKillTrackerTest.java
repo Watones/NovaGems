@@ -23,6 +23,23 @@ class DailyKillTrackerTest {
   }
 
   @Test
+  void releasingAKillWhoseRewardWasRejectedFreesTheSlotAndTheVictim() {
+    DailyKillTracker tracker = new DailyKillTracker();
+    UUID killer = UUID.randomUUID();
+    UUID victim = UUID.randomUUID();
+    assertThat(tracker.registerKill(killer, victim, 1)).isEqualTo(1);
+
+    tracker.release(killer, victim, "1999-01-01");
+    assertThat(tracker.countToday(killer)).isEqualTo(1);
+
+    tracker.release(killer, victim, tracker.todayKey());
+
+    assertThat(tracker.countToday(killer)).isZero();
+    assertThat(tracker.trackedPlayers()).isZero();
+    assertThat(tracker.registerKill(killer, victim, 1)).isEqualTo(1);
+  }
+
+  @Test
   void seedKeepsVictimsAlreadyPaidForBeforeTheRestartLoadLanded() {
     DailyKillTracker tracker = new DailyKillTracker();
     UUID killer = UUID.randomUUID();

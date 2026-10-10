@@ -40,8 +40,8 @@ public final class NovaGemsPlugin extends JavaPlugin {
   private volatile BukkitTask historyTask;
   private volatile DiscordWebhookAlertService alerts;
   private volatile DatabaseBackupService backups;
+  private volatile ConfigManager configuration;
   private volatile boolean stopping;
-  private volatile int shutdownTotalSeconds = 10;
 
   @Override
   public void onEnable() {
@@ -51,6 +51,8 @@ public final class NovaGemsPlugin extends JavaPlugin {
   }
 
   private void bootstrapOffThread() {
+    StorageProvider initializedStorage = null;
+    WalletService initializedWallets = null;
     try {
       saveDefaultConfig();
       saveBundled("messages.yml");
@@ -66,12 +68,12 @@ public final class NovaGemsPlugin extends JavaPlugin {
           shopConfig.parseCandidate(), runtime.allowMultipleIrreversibleActions());
       shopConfig.swap(initialShop);
 
-      StorageProvider initializedStorage = config.createStorage();
+      initializedStorage = config.createStorage();
       initializedStorage.initialize();
       initializedStorage.configureMaxBalance(runtime.maxBalance());
       RuntimeConfig.QueueLimits queueLimits = runtime.queues();
       RuntimeConfig.RecoverySettings recovery = runtime.recovery();
-      WalletService initializedWallets = new WalletService(
+      initializedWallets = new WalletService(
           initializedStorage,
           getDataFolder().toPath().resolve("recovery"),
           error -> {
@@ -101,23 +103,36 @@ public final class NovaGemsPlugin extends JavaPlugin {
       if (runtime.debug()) {
         initializedWallets.onDebug(message -> getLogger().info("[debug] " + message));
       }
+      WalletService walletsForSessions = initializedWallets;
 
       SessionRegistry registry = new SessionRegistry();
       ActivityGuard guard = new ConservativeActivityGuard(config);
-      RewardService rewards = new RewardService(this, initializedWallets, config, messages);
+      RewardService rewards = new RewardService(this, walletsForSessions, config, messages);
       SessionService initializedSessions = new SessionService(
           registry, guard, rewards, config, this, messages, recovery.writerQueueCapacity());
       ShopService shop =
-          new ShopService(this, shopConfig, config, initializedWallets, messages);
+          new ShopService(this, shopConfig, config, walletsForSessions, messages);
       BootstrapContext context = new BootstrapContext(config, runtime, messages, shopConfig,
-          initializedStorage, initializedWallets, registry, guard, initializedSessions, shop);
+          initializedStorage, walletsForSessions, registry, guard, initializedSessions, shop);
       Bukkit.getScheduler().runTask(this, () -> finishEnable(context));
     } catch (Exception failure) {
-      getLogger().log(Level.SEVERE, "NovaGems no puede iniciar de forma segura", failure);
-      DiscordWebhookAlertService currentAlerts = alerts;
-      if (currentAlerts != null) currentAlerts.alert("startup-failure", "Fallo de inicio",
-          errorSummary(failure));
-      Bukkit.getScheduler().runTask(this, () -> getServer().getPluginManager().disablePlugin(this));
+      // Also reached when the server stopped mid-bootstrap and the hand-off above was refused.
+      // Nothing was published to onDisable yet, so whatever was opened here is closed here.
+      if (!stopping) {
+        getLogger().log(Level.SEVERE, "NovaGems no puede iniciar de forma segura", failure);
+        DiscordWebhookAlertService currentAlerts = alerts;
+        if (currentAlerts != null) currentAlerts.alert("startup-failure", "Fallo de inicio",
+            errorSummary(failure));
+      }
+      closeBootstrap(initializedWallets, initializedStorage);
+      try {
+        Bukkit.getScheduler()
+            .runTask(this, () -> getServer().getPluginManager().disablePlugin(this));
+      } catch (RuntimeException alreadyDisabled) {
+        // Already disabled, so onDisable will not run again to close the alert worker. When the
+        // task above was accepted it does, after the startup alert had time to go out.
+        if (alerts != null) alerts.close();
+      }
     }
   }
 
@@ -129,9 +144,7 @@ public final class NovaGemsPlugin extends JavaPlugin {
     storage = context.storage;
     wallets = context.wallets;
     sessions = context.sessions;
-    shutdownTotalSeconds = Math.min(10,
-        context.runtime.journalDrainTimeoutSeconds()
-            + context.runtime.databaseDrainTimeoutSeconds());
+    configuration = context.config;
 
     context.wallets.replayRecovery().thenAccept(report -> {
       if (report.recovered() > 0 || report.stillPending() > 0) {
@@ -201,7 +214,7 @@ public final class NovaGemsPlugin extends JavaPlugin {
     if (rewardTask != null) rewardTask.cancel();
     if (alertTask != null) alertTask.cancel();
     if (historyTask != null) historyTask.cancel();
-    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(shutdownTotalSeconds);
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(shutdownTotalSeconds());
     SessionService.ShutdownReport sessionReport = sessions == null
         ? new SessionService.ShutdownReport(0, 0) : sessions.shutdownAndDrain(deadline);
     WalletService.ShutdownReport walletReport = wallets == null
@@ -225,11 +238,31 @@ public final class NovaGemsPlugin extends JavaPlugin {
     if (alerts != null) alerts.close();
   }
 
+  /**
+   * Read at shutdown so a reloaded value counts. Capped: the server is waiting on this thread, and
+   * whatever is not drained in time is already safe in the recovery journal.
+   */
+  private int shutdownTotalSeconds() {
+    ConfigManager current = configuration;
+    if (current == null) return 10;
+    RuntimeConfig runtime = current.current();
+    return Math.min(10,
+        runtime.journalDrainTimeoutSeconds() + runtime.databaseDrainTimeoutSeconds());
+  }
+
   private void closeContext(BootstrapContext context) {
-    context.wallets.close();
-    try { context.storage.close(); }
-    catch (Exception failure) { getLogger().log(Level.SEVERE, "Error cerrando bootstrap", failure); }
+    closeBootstrap(context.wallets, context.storage);
     if (alerts != null) alerts.close();
+  }
+
+  private void closeBootstrap(WalletService openWallets, StorageProvider openStorage) {
+    if (openWallets != null) openWallets.close();
+    if (openStorage != null) {
+      try { openStorage.close(); }
+      catch (Exception failure) {
+        getLogger().log(Level.SEVERE, "Error cerrando bootstrap", failure);
+      }
+    }
   }
 
   private void startBackups(StorageProvider storage, RuntimeConfig.BackupSettings settings) {

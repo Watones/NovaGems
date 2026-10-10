@@ -54,6 +54,17 @@ public final class DailyKillTracker {
     return victims.size();
   }
 
+  /** Gives back the slot taken by {@link #registerKill} when that kill's reward was not accepted. */
+  public synchronized void release(UUID killer, UUID victim, String day) {
+    // A rejection that lands after midnight must not free today's entry for the same pair.
+    if (!day.equals(todayKey())) return;
+    rollOverIfNeeded();
+    Set<UUID> victims = victimsByKiller.get(killer);
+    if (victims == null) return;
+    victims.remove(victim);
+    if (victims.isEmpty()) victimsByKiller.remove(killer);
+  }
+
   /**
    * Merges persisted state for {@code day} into memory. Merging rather than replacing keeps any
    * kill that landed between enable and the storage read finishing.

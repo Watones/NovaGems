@@ -28,6 +28,8 @@ import net.watones.novagems.economy.TransactionType;
 /** Shared, additive JDBC schema and the authoritative balance mutation transaction. */
 public abstract class JdbcStorageProvider implements StorageProvider {
   private static final int SCHEMA_VERSION = 5;
+  /** The version that added reward_notified; older databases need its one-off backfill. */
+  private static final int REWARD_NOTICE_SCHEMA_VERSION = 5;
   private volatile long maxBalance = Long.MAX_VALUE;
   private volatile boolean maxBalanceConfigured = false;
 
@@ -86,7 +88,7 @@ public abstract class JdbcStorageProvider implements StorageProvider {
               + " PRIMARY KEY (killer, victim, kill_day))");
     }
 
-    migrateTransactionColumns();
+    migrateTransactionColumns(storedSchemaVersion());
     backfillOperationIds();
     ensureIndex("coin_transactions", "uq_coin_transactions_operation", "operation_id", true);
     ensureIndex("coin_transactions", "idx_coin_transactions_uuid_created", "uuid, created_at", false);
@@ -97,10 +99,29 @@ public abstract class JdbcStorageProvider implements StorageProvider {
         "novacoins_admin_audit", "idx_novacoins_audit_operation", "operation_id, created_at", false);
     // The primary key leads with `killer`, so the per-day load and prune need their own index.
     ensureIndex("novagems_daily_kills", "idx_novagems_daily_kills_day", "kill_day", false);
+    // A reward notice is claimed after every playtime credit and on every login. Without these
+    // two, claiming walks every playtime row in the ledger and then reads and clears its rows by
+    // an unindexed claim id; on MySQL concurrent claims also lock each other's rows.
+    ensureIndex(
+        "coin_transactions", "idx_coin_transactions_uuid_notified", "uuid, reward_notified",
+        false);
+    ensureIndex(
+        "coin_transactions", "idx_coin_transactions_notice_claim", "reward_notification_claim",
+        false);
     writeSchemaVersion();
   }
 
-  private void migrateTransactionColumns() throws SQLException {
+  /** Null for a database created before the schema table existed, or one that is brand new. */
+  private Integer storedSchemaVersion() throws SQLException {
+    try (Connection connection = dataSource().getConnection();
+        Statement statement = connection.createStatement();
+        ResultSet result = statement.executeQuery(
+            "SELECT schema_version FROM novacoins_schema WHERE schema_key='core'")) {
+      return result.next() ? result.getInt(1) : null;
+    }
+  }
+
+  private void migrateTransactionColumns(Integer previousVersion) throws SQLException {
     addColumnIfMissing("coin_transactions", "operation_id", "VARCHAR(36)");
     addColumnIfMissing(
         "coin_transactions", "status", "VARCHAR(32) NOT NULL DEFAULT 'COMMITTED'");
@@ -112,7 +133,10 @@ public abstract class JdbcStorageProvider implements StorageProvider {
         "coin_transactions", "reward_notified", "INTEGER NOT NULL DEFAULT 0");
     addColumnIfMissing("coin_transactions", "reward_notification_claim", "VARCHAR(36)");
     // Existing rewards predate this feature and must not produce a notification storm on upgrade.
-    if (notificationColumnAdded) {
+    // The stored version decides it as well as "the column was added in this run": a start that
+    // died between the ALTER and this UPDATE must still finish the job on the next one.
+    if (notificationColumnAdded
+        || (previousVersion != null && previousVersion < REWARD_NOTICE_SCHEMA_VERSION)) {
       try (Connection connection = dataSource().getConnection();
           Statement statement = connection.createStatement()) {
         statement.executeUpdate("UPDATE coin_transactions SET reward_notified=1");
@@ -242,10 +266,29 @@ public abstract class JdbcStorageProvider implements StorageProvider {
     try (Connection connection = dataSource().getConnection();
         PreparedStatement statement =
             connection.prepareStatement(
-                "SELECT uuid FROM coin_accounts WHERE LOWER(last_name)=LOWER(?)")) {
+                "SELECT uuid FROM coin_accounts WHERE LOWER(last_name)=LOWER(?)"
+                    + " ORDER BY updated_at DESC")) {
       statement.setString(1, name);
       try (ResultSet result = statement.executeQuery()) {
         return result.next() ? Optional.of(UUID.fromString(result.getString(1))) : Optional.empty();
+      }
+    }
+  }
+
+  @Override
+  public List<AccountRef> findAccountsByName(String name) throws Exception {
+    try (Connection connection = dataSource().getConnection();
+        PreparedStatement statement =
+            connection.prepareStatement(
+                "SELECT uuid,last_name FROM coin_accounts WHERE LOWER(last_name)=LOWER(?)"
+                    + " ORDER BY updated_at DESC LIMIT 5")) {
+      statement.setString(1, name);
+      try (ResultSet result = statement.executeQuery()) {
+        List<AccountRef> output = new ArrayList<>();
+        while (result.next()) {
+          output.add(new AccountRef(UUID.fromString(result.getString(1)), result.getString(2)));
+        }
+        return output;
       }
     }
   }
@@ -675,6 +718,19 @@ public abstract class JdbcStorageProvider implements StorageProvider {
   }
 
   @Override
+  public void forgetDailyKill(UUID killer, UUID victim, String day) throws Exception {
+    try (Connection connection = dataSource().getConnection();
+        PreparedStatement statement =
+            connection.prepareStatement(
+                "DELETE FROM novagems_daily_kills WHERE killer=? AND victim=? AND kill_day=?")) {
+      statement.setString(1, killer.toString());
+      statement.setString(2, victim.toString());
+      statement.setString(3, day);
+      statement.executeUpdate();
+    }
+  }
+
+  @Override
   public int pruneDailyKillsBefore(String day) throws Exception {
     try (Connection connection = dataSource().getConnection();
         PreparedStatement statement =
@@ -721,6 +777,19 @@ public abstract class JdbcStorageProvider implements StorageProvider {
         PreparedStatement statement =
             connection.prepareStatement(
                 "SELECT * FROM coin_transactions WHERE status IN ('DELIVERY_PENDING','DELIVERY_STARTED','DELIVERY_FAILED','DELIVERY_FAILED_SAFE','DELIVERY_AMBIGUOUS','DELIVERY_PARTIAL','MANUAL_REVIEW')"
+                    + " ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?")) {
+      statement.setInt(1, limit);
+      statement.setInt(2, offset);
+      return readTransactions(statement);
+    }
+  }
+
+  @Override
+  public List<GemTransaction> manualReviews(int offset, int limit) throws Exception {
+    try (Connection connection = dataSource().getConnection();
+        PreparedStatement statement =
+            connection.prepareStatement(
+                "SELECT * FROM coin_transactions WHERE status='MANUAL_REVIEW'"
                     + " ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?")) {
       statement.setInt(1, limit);
       statement.setInt(2, offset);

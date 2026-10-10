@@ -4,8 +4,10 @@ import net.watones.novagems.shop.ShopService;
 import net.watones.novagems.shop.menu.*;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.inventory.*;
+import org.bukkit.event.player.PlayerRespawnEvent;
 
 public final class ShopListener implements Listener {
   private final ShopService shop;
@@ -34,6 +36,11 @@ public final class ShopListener implements Listener {
     } else if (holder instanceof StackPickerHolder picker) {
       shop.handleStackPick(player, picker, e.getRawSlot());
     }
+  }
+
+  @EventHandler(priority = EventPriority.MONITOR)
+  public void respawn(PlayerRespawnEvent e) {
+    shop.recoverAfterRespawn(e.getPlayer());
   }
 
   @EventHandler

@@ -20,7 +20,6 @@ import net.watones.novagems.economy.GemTransaction;
 import net.watones.novagems.economy.MutationKind;
 import net.watones.novagems.economy.PlayerAccount;
 import net.watones.novagems.economy.TransactionType;
-import net.watones.novagems.economy.TransactionStatus;
 import net.watones.novagems.economy.WalletService;
 import net.watones.novagems.message.MessageService;
 import net.watones.novagems.shop.ShopService;
@@ -91,7 +90,8 @@ public final class NovaGemsCommand implements CommandExecutor, TabCompleter {
 
   @Override
   public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
-    if (label.equalsIgnoreCase("gemas")) return onGemasCommand(sender, args);
+    // By command, not by the typed label: /novagems:gemas must still be the player command.
+    if (command.getName().equalsIgnoreCase("gemas")) return onGemasCommand(sender, args);
     return onAdminCommand(sender, args);
   }
 
@@ -362,15 +362,23 @@ public final class NovaGemsCommand implements CommandExecutor, TabCompleter {
   private void withAccount(
       CommandSender sender, String name, BiConsumer<UUID, PlayerAccount> action) {
     Player online = Bukkit.getPlayerExact(name);
+    if (online == null) {
+      try {
+        online = Bukkit.getPlayer(UUID.fromString(name));
+      } catch (IllegalArgumentException notUuid) {
+        // A plain name: resolved from storage below.
+      }
+    }
     if (online != null) {
-      wallets.load(online.getUniqueId(), online.getName()).whenComplete((account, error) ->
+      Player target = online;
+      wallets.load(target.getUniqueId(), target.getName()).whenComplete((account, error) ->
           sync(() -> {
             if (error != null) messages.send(sender, "account-error");
-            else action.accept(online.getUniqueId(), account);
+            else action.accept(target.getUniqueId(), account);
           }));
       return;
     }
-    wallets.findUuid(name).whenComplete((found, error) -> {
+    wallets.findAccounts(name).whenComplete((found, error) -> {
       if (error != null) {
         sync(() -> messages.send(sender, "account-error"));
         return;
@@ -379,12 +387,24 @@ public final class NovaGemsCommand implements CommandExecutor, TabCompleter {
         sync(() -> messages.send(sender, "player-not-found", Map.of("player", name)));
         return;
       }
-      UUID uuid = found.get();
-      wallets.load(uuid, name).whenComplete((account, loadError) -> sync(() -> {
+      if (found.size() > 1) {
+        // Two accounts last seen under this name: never guess whose gems to touch.
+        StringBuilder accounts = new StringBuilder();
+        for (var candidate : found) accounts.append("\n").append(candidate.uuid());
+        sync(() -> messages.send(sender, "player-ambiguous", Map.of(
+            "player", name,
+            "count", Integer.toString(found.size()),
+            "accounts", accounts.toString())));
+        return;
+      }
+      UUID uuid = found.get(0).uuid();
+      // The stored name, not the admin's spelling, so the lookup does not rewrite it.
+      wallets.load(uuid, found.get(0).name()).whenComplete((account, loadError) -> sync(() -> {
         if (loadError != null) messages.send(sender, "account-error");
         else {
           action.accept(uuid, account);
-          wallets.unload(uuid);
+          // They may have joined while the lookup was in flight; their session owns it now.
+          if (Bukkit.getPlayer(uuid) == null) wallets.unload(uuid);
         }
       }));
     });
@@ -406,7 +426,7 @@ public final class NovaGemsCommand implements CommandExecutor, TabCompleter {
   @Override
   public List<String> onTabComplete(
       CommandSender sender, Command command, String alias, String[] args) {
-    if (alias.equalsIgnoreCase("gemas")) {
+    if (command.getName().equalsIgnoreCase("gemas")) {
       if (args.length == 1) return matching(List.of("balance", "bal", "top", "help"), args[0]);
       return List.of();
     }
@@ -499,14 +519,11 @@ public final class NovaGemsCommand implements CommandExecutor, TabCompleter {
 
   private void reviewCommand(CommandSender sender, String[] args) {
     if (args.length == 1) {
-      wallets.deliveryFailures(1, 50).whenComplete((entries, error) -> sync(() -> {
+      wallets.manualReviews(1, 50).whenComplete((reviews, error) -> sync(() -> {
         if (error != null) {
           messages.send(sender, "account-error");
           return;
         }
-        List<GemTransaction> reviews = entries.stream()
-            .filter(transaction -> transaction.status() == TransactionStatus.MANUAL_REVIEW)
-            .toList();
         messages.send(sender, "review-list-header", Map.of("count", Integer.toString(reviews.size())));
         for (GemTransaction transaction : reviews) messages.send(sender, "review-list-entry", Map.of(
             "operation", transaction.operationId().toString(),

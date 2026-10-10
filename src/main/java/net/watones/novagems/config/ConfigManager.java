@@ -7,6 +7,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.net.URI;
 import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import net.watones.novagems.storage.MySqlStorageProvider;
 import net.watones.novagems.storage.SQLiteStorageProvider;
 import net.watones.novagems.storage.StorageProvider;
@@ -18,6 +20,7 @@ import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.plugin.java.JavaPlugin;
 
 public final class ConfigManager {
+  private static final Pattern YAML_MARK = Pattern.compile("line (\\d+), column (\\d+)");
   private final JavaPlugin plugin;
   private volatile RuntimeConfig current;
 
@@ -51,7 +54,8 @@ public final class ConfigManager {
     long gemsPerKill = config.getLong("rewards.kills.gems-per-kill", 10);
     int killDailyLimit = config.getInt("rewards.kills.daily-limit", 10);
     if (gemsPerKill < 1 || gemsPerKill > maxBalance) {
-      throw new IllegalArgumentException("rewards.kills.gems-per-kill debe ser positivo");
+      throw new IllegalArgumentException(
+          "rewards.kills.gems-per-kill debe estar entre 1 y economy.max-balance");
     }
     if (killDailyLimit < 0 || killDailyLimit > 100_000) {
       throw new IllegalArgumentException("rewards.kills.daily-limit debe estar entre 0 y 100000");
@@ -82,7 +86,7 @@ public final class ConfigManager {
     }
 
     String soundPath =
-        config.contains("notifications.reward.sound.name")
+        explicitly(config, "notifications.reward.sound.name")
             ? "notifications.reward.sound.name"
             : "notifications.sound-name";
     Sound sound =
@@ -91,13 +95,13 @@ public final class ConfigManager {
     if (sound == null) throw new IllegalArgumentException(soundPath + " no es válido");
     double volume =
         config.getDouble(
-            config.contains("notifications.reward.sound.volume")
+            explicitly(config, "notifications.reward.sound.volume")
                 ? "notifications.reward.sound.volume"
                 : "notifications.sound-volume",
             0.8);
     double pitch =
         config.getDouble(
-            config.contains("notifications.reward.sound.pitch")
+            explicitly(config, "notifications.reward.sound.pitch")
                 ? "notifications.reward.sound.pitch"
                 : "notifications.sound-pitch",
             1.15);
@@ -196,17 +200,17 @@ public final class ConfigManager {
             (float) shopPitch),
         new RuntimeConfig.Notification(
             config.getBoolean(
-                config.contains(rewardPrefix + "chat")
+                explicitly(config, rewardPrefix + "chat")
                     ? rewardPrefix + "chat"
                     : "notifications.chat",
-                true),
+                false),
             config.getBoolean(
-                config.contains(rewardPrefix + "actionbar")
+                explicitly(config, rewardPrefix + "actionbar")
                     ? rewardPrefix + "actionbar"
                     : "notifications.actionbar",
                 false),
             config.getBoolean(
-                config.contains(rewardPrefix + "sound.enabled")
+                explicitly(config, rewardPrefix + "sound.enabled")
                     ? rewardPrefix + "sound.enabled"
                     : "notifications.sound",
                 true),
@@ -324,6 +328,29 @@ public final class ConfigManager {
     return sound;
   }
 
+  /** Set in the server's own file, as opposed to inherited from the bundled defaults. */
+  private static boolean explicitly(FileConfiguration config, String path) {
+    return config.contains(path, true);
+  }
+
+  private static String position(InvalidConfigurationException exception) {
+    String message = exception.getMessage();
+    if (message == null) return "";
+    // The parser names the enclosing block first and the exact spot last. For an unclosed quote
+    // the spot is the end of the file, so the block is the useful half: report both.
+    Matcher mark = YAML_MARK.matcher(message);
+    String block = null;
+    String spot = null;
+    while (mark.find()) {
+      spot = "línea " + mark.group(1) + ", columna " + mark.group(2);
+      if (block == null) block = "línea " + mark.group(1);
+    }
+    if (spot == null) return "";
+    return spot.startsWith(block + ",")
+        ? " (" + spot + ")"
+        : " (" + spot + "; bloque iniciado en " + block + ")";
+  }
+
   private String required(FileConfiguration config, String path) {
     String value = config.getString(path);
     if (value == null || value.isBlank()) throw new IllegalArgumentException(path + " es obligatorio");
@@ -334,9 +361,12 @@ public final class ConfigManager {
     YamlConfiguration parsed = new YamlConfiguration();
     try {
       parsed.load(new File(plugin.getDataFolder(), "config.yml"));
-    } catch (IOException | InvalidConfigurationException exception) {
-      throw new IllegalArgumentException(
-          "config.yml no es YAML válido: " + exception.getMessage(), exception);
+    } catch (IOException exception) {
+      throw new IllegalArgumentException("No se pudo leer config.yml", exception);
+    } catch (InvalidConfigurationException exception) {
+      // The parser quotes the offending line, which can be the database password or the webhook
+      // URL. Report where the error is, never the text, and do not chain the original either.
+      throw new IllegalArgumentException("config.yml no es YAML válido" + position(exception));
     }
     try (var stream = plugin.getResource("config.yml")) {
       if (stream != null) {

@@ -17,6 +17,14 @@ public interface StorageProvider extends AutoCloseable {
 
   Optional<UUID> findUuidByName(String name) throws Exception;
 
+  /**
+   * Every account whose last known name matches, most recently updated first. More than one means
+   * the name is ambiguous: a player renamed without rejoining and someone else took the name.
+   */
+  default List<AccountRef> findAccountsByName(String name) throws Exception {
+    return findUuidByName(name).map(uuid -> List.of(new AccountRef(uuid, name))).orElseGet(List::of);
+  }
+
   PlayerAccount loadOrCreate(UUID uuid, String name) throws Exception;
 
   DurableMutationResult applyOperation(EconomyOperation operation) throws Exception;
@@ -30,6 +38,13 @@ public interface StorageProvider extends AutoCloseable {
   List<GemTransaction> history(UUID uuid, int offset, int limit) throws Exception;
 
   List<GemTransaction> deliveryFailures(int offset, int limit) throws Exception;
+
+  /** Purchases waiting for a staff decision, newest first. */
+  default List<GemTransaction> manualReviews(int offset, int limit) throws Exception {
+    return deliveryFailures(offset, limit).stream()
+        .filter(transaction -> transaction.status() == TransactionStatus.MANUAL_REVIEW)
+        .toList();
+  }
 
   long countTransactions(TransactionStatus status) throws Exception;
 
@@ -65,6 +80,9 @@ public interface StorageProvider extends AutoCloseable {
   /** Idempotent: re-recording the same killer/victim/day is a no-op. */
   default void recordDailyKill(UUID killer, UUID victim, String day, long timestamp)
       throws Exception {}
+
+  /** Undoes {@link #recordDailyKill} for a kill whose reward was never accepted. */
+  default void forgetDailyKill(UUID killer, UUID victim, String day) throws Exception {}
 
   /** Drops rows for days before {@code day}; the tracker only ever reads the current day. */
   default int pruneDailyKillsBefore(String day) throws Exception {
@@ -102,6 +120,8 @@ public interface StorageProvider extends AutoCloseable {
   void close() throws Exception;
 
   record LeaderboardEntry(String name, long balance) {}
+
+  record AccountRef(UUID uuid, String name) {}
 
   record RewardNotification(int rewards, long amount, long balance) {}
 }

@@ -263,6 +263,99 @@ class SQLiteStorageProviderTest {
     storage.close();
   }
 
+  @Test
+  void nameSharedByTwoAccountsIsReportedAsAmbiguousNewestFirst(@TempDir Path temp)
+      throws Exception {
+    SQLiteStorageProvider storage = new SQLiteStorageProvider(temp.resolve("names.db"));
+    storage.initialize();
+    UUID renamedAway = UUID.randomUUID();
+    UUID currentHolder = UUID.randomUUID();
+    storage.loadOrCreate(renamedAway, "Alex");
+    storage.loadOrCreate(currentHolder, "Alex");
+    Thread.sleep(5);
+    storage.applyOperation(credit(UUID.randomUUID(), currentHolder, 5, 1));
+    storage.loadOrCreate(UUID.randomUUID(), "Steve");
+
+    assertThat(storage.findAccountsByName("alex"))
+        .extracting(StorageProvider.AccountRef::uuid)
+        .containsExactly(currentHolder, renamedAway);
+    assertThat(storage.findUuidByName("alex")).contains(currentHolder);
+    assertThat(storage.findAccountsByName("alex").get(0).name()).isEqualTo("Alex");
+    assertThat(storage.findAccountsByName("steve")).hasSize(1);
+    assertThat(storage.findAccountsByName("nobody")).isEmpty();
+    storage.close();
+  }
+
+  @Test
+  void manualReviewsAreListedEvenBehindManyOtherOpenDeliveries(@TempDir Path temp)
+      throws Exception {
+    SQLiteStorageProvider storage = new SQLiteStorageProvider(temp.resolve("reviews.db"));
+    storage.initialize();
+    UUID player = UUID.randomUUID();
+    storage.loadOrCreate(player, "Antonio");
+    storage.applyOperation(credit(UUID.randomUUID(), player, 1_000, 1));
+    UUID review = UUID.randomUUID();
+    Instant old = Instant.now().minusSeconds(3_600);
+    storage.applyOperation(new EconomyOperation(review, player, MutationKind.DEBIT, 1,
+        TransactionType.SHOP_PURCHASE, "SHOP_PURCHASE", "reward",
+        TransactionStatus.DELIVERY_PENDING, old, 2));
+    storage.markDelivery(review, TransactionStatus.DELIVERY_STARTED, null);
+    storage.markDelivery(review, TransactionStatus.MANUAL_REVIEW, "ambiguous");
+    for (int index = 0; index < 60; index++) {
+      storage.applyOperation(new EconomyOperation(UUID.randomUUID(), player, MutationKind.DEBIT,
+          1, TransactionType.SHOP_PURCHASE, "SHOP_PURCHASE", "reward",
+          TransactionStatus.DELIVERY_PENDING, Instant.now(), 3 + index));
+    }
+
+    assertThat(storage.deliveryFailures(0, 50))
+        .noneMatch(transaction -> transaction.operationId().equals(review));
+    assertThat(storage.manualReviews(0, 50))
+        .extracting(net.watones.novagems.economy.GemTransaction::operationId)
+        .containsExactly(review);
+    storage.close();
+  }
+
+  @Test
+  void forgettingADailyKillRemovesOnlyThatPair(@TempDir Path temp) throws Exception {
+    SQLiteStorageProvider storage = new SQLiteStorageProvider(temp.resolve("kills.db"));
+    storage.initialize();
+    UUID killer = UUID.randomUUID();
+    UUID kept = UUID.randomUUID();
+    UUID rejected = UUID.randomUUID();
+    storage.recordDailyKill(killer, kept, "2026-10-09", 1L);
+    storage.recordDailyKill(killer, rejected, "2026-10-09", 2L);
+
+    storage.forgetDailyKill(killer, rejected, "2026-10-09");
+
+    assertThat(storage.loadDailyKills("2026-10-09").get(killer)).containsExactly(kept);
+    storage.close();
+  }
+
+  @Test
+  void interruptedNotificationBackfillIsFinishedOnTheNextStart(@TempDir Path temp)
+      throws Exception {
+    Path database = temp.resolve("interrupted.db");
+    UUID player = UUID.randomUUID();
+    SQLiteStorageProvider first = new SQLiteStorageProvider(database);
+    first.initialize();
+    first.loadOrCreate(player, "Antonio");
+    first.applyOperation(new EconomyOperation(UUID.randomUUID(), player, MutationKind.CREDIT, 10,
+        TransactionType.PLAYTIME_REWARD, "SESSION_INTERVAL", "session",
+        TransactionStatus.COMMITTED, Instant.now(), 1));
+    first.close();
+    // The state a pre-v5 database is left in when the server dies right after the ALTER: the
+    // column exists, every historical reward reads as un-notified, the version is still old.
+    try (var connection = DriverManager.getConnection("jdbc:sqlite:" + database);
+        Statement statement = connection.createStatement()) {
+      statement.executeUpdate("UPDATE novacoins_schema SET schema_version=4");
+    }
+
+    SQLiteStorageProvider restarted = new SQLiteStorageProvider(database);
+    restarted.initialize();
+    assertThat(restarted.claimRewardNotification(player)).isEmpty();
+    restarted.close();
+  }
+
   private static EconomyOperation credit(UUID operationId, UUID player, long amount, long sequence) {
     return new EconomyOperation(operationId, player, MutationKind.CREDIT, amount,
         TransactionType.ADMIN_GIVE, "seed", "admin:CONSOLE", TransactionStatus.COMMITTED,
