@@ -1,6 +1,5 @@
 plugins {
     java
-    id("com.gradleup.shadow") version "9.2.2"
 }
 
 group = "net.watones"
@@ -41,21 +40,12 @@ tasks {
     jar {
         enabled = true
         archiveFileName.set("NovaGems-${project.version}.jar")
-        exclude("plugin-offline.yml")
     }
     processResources {
         inputs.property("pluginVersion", pluginVersion)
-        filesMatching(listOf("plugin.yml", "plugin-offline.yml")) {
+        filesMatching("plugin.yml") {
             expand("version" to pluginVersion)
         }
     }
     test { useJUnitPlatform() }
-    shadowJar {
-        archiveFileName.set("NovaGems-${project.version}-offline.jar")
-        exclude("plugin.yml")
-        filesMatching("plugin-offline.yml") { name = "plugin.yml" }
-        mergeServiceFiles()
-    }
-
-    build { dependsOn(shadowJar) }
 }

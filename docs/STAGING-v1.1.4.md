@@ -1,6 +1,6 @@
 # NovaGems v1.1.4 — checklist de staging
 
-Instalar y probar cada distribución por separado. Nunca colocar ambos JAR en `plugins/` al mismo tiempo.
+Instalar un único `NovaGems-1.1.4.jar` en `plugins/`.
 
 ## Base
 
@@ -12,7 +12,7 @@ Instalar y probar cada distribución por separado. Nunca colocar ambos JAR en `p
 
 - [ ] Arranque limpio con `NovaGems-1.1.4.jar` y acceso del host a Maven Central.
 - [ ] Confirmar en logs que Paper resolvió HikariCP 7.0.2, sqlite-jdbc 3.51.1.0 y mysql-connector-j 9.6.0.
-- [ ] Arranque limpio con `NovaGems-1.1.4-offline.jar` y acceso externo bloqueado.
+- [ ] Segundo arranque con el acceso externo bloqueado; confirmar que Paper reutiliza la caché de libraries.
 - [ ] Confirmar ausencia de conflictos de clase y que sólo existe una instancia de NovaGems.
 - [ ] Confirmar Java 21, Paper 1.21.x y `api-version: 1.21`.
 

@@ -27,15 +27,12 @@ Antes de ejecutar una acción irreversible, NovaGems confirma `DELIVERY_STARTED`
 ## Instalación y compilación
 
 1. Compila con `./gradlew clean test build`.
-2. Elige **una sola** distribución:
-   - `build/libs/NovaGems-1.1.4.jar` (recomendada): JAR slim; Paper resuelve SQLite JDBC, MySQL Connector/J y HikariCP desde Maven durante el arranque.
-   - `build/libs/NovaGems-1.1.4-offline.jar`: JAR autocontenido para hosts sin acceso a Maven durante el arranque.
-3. Copia únicamente el JAR elegido a `plugins/`.
-4. Inicia Paper 1.21.x con Java 21.
+2. Copia `build/libs/NovaGems-1.1.4.jar` a `plugins/`. Es el único artefacto.
+3. Inicia Paper 1.21.x con Java 21.
 
-No instales ambos JAR simultáneamente. Paper y PlaceholderAPI nunca se incluyen. El artefacto offline conserva los paquetes JDBC originales para que `ServiceLoader`, los drivers y Hikari funcionen con sus nombres oficiales; el aislamiento del classloader de Paper evita necesitar relocations aquí.
+El JAR no incluye dependencias: Paper resuelve SQLite JDBC, MySQL Connector/J y HikariCP desde Maven durante el arranque (`libraries` en `plugin.yml`). Paper y PlaceholderAPI nunca se incluyen.
 
-El slim necesita acceso al repositorio Maven configurado por Paper en el primer arranque; si la resolución falla, Paper puede no cargar NovaGems. Los arranques posteriores reutilizan la caché de libraries. El tamaño pequeño corresponde al artefacto de NovaGems: las dependencias externalizadas siguen ocupando espacio en la caché del servidor. Para un host sin salida a Internet usa el JAR offline.
+El servidor necesita acceso al repositorio Maven configurado por Paper en el primer arranque; si la resolución falla, Paper puede no cargar NovaGems. Los arranques posteriores reutilizan la caché de libraries. El tamaño pequeño corresponde al artefacto de NovaGems: las dependencias siguen ocupando espacio en la caché del servidor.
 
 ## Comandos
 
