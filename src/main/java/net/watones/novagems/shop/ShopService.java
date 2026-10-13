@@ -5,6 +5,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.logging.Level;
 import net.kyori.adventure.text.format.TextDecoration;
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import net.watones.novagems.config.ConfigManager;
 import net.watones.novagems.config.RuntimeConfig;
 import net.watones.novagems.config.ShopConfig;
@@ -14,6 +15,7 @@ import net.watones.novagems.economy.TransactionStatus;
 import net.watones.novagems.economy.TransactionType;
 import net.watones.novagems.economy.WalletService;
 import net.watones.novagems.message.MessageService;
+import net.watones.novagems.purchaselog.PurchaseEvent;
 import net.watones.novagems.shop.menu.ConfirmMenuHolder;
 import net.watones.novagems.shop.menu.QuantityMenuHolder;
 import net.watones.novagems.shop.menu.ShopMenuHolder;
@@ -39,6 +41,7 @@ public final class ShopService {
   private final MessageService messages;
   private final PurchaseGate gate = new PurchaseGate();
   private final Map<UUID, Long> pendingNotices = new java.util.concurrent.ConcurrentHashMap<>();
+  private volatile java.util.function.Consumer<PurchaseEvent> purchaseLog = ignored -> {};
 
   public ShopService(
       JavaPlugin plugin,
@@ -51,6 +54,18 @@ public final class ShopService {
     this.runtimeConfig = runtimeConfig;
     this.wallets = wallets;
     this.messages = messages;
+    wallets.onPurchaseSettledInRecovery(
+        (purchaseOperationId, status) -> {
+          if (status == TransactionStatus.REFUNDED) {
+            logSettledPurchase(
+                PurchaseEvent.Kind.REFUNDED, purchaseOperationId,
+                "Reembolso completado por recuperación");
+          } else if (status == TransactionStatus.MANUAL_REVIEW) {
+            logSettledPurchase(
+                PurchaseEvent.Kind.MANUAL_REVIEW, purchaseOperationId,
+                "El servidor se reinició durante la entrega");
+          }
+        });
     wallets.onDeliveryReady(
         uuid -> {
           if (!plugin.isEnabled()) return;
@@ -62,6 +77,104 @@ public final class ShopService {
                     if (player != null && player.isOnline()) recoverPending(player);
                   });
         });
+  }
+
+  /** Receives every settled purchase. The listener must not block: it runs on server threads. */
+  public void onPurchaseEvent(java.util.function.Consumer<PurchaseEvent> listener) {
+    purchaseLog = listener == null ? ignored -> {} : listener;
+  }
+
+  /**
+   * Logs a purchase settled away from the normal delivery path (a recovery pass, a staff
+   * decision), from what storage knows about it. Asynchronous and best effort.
+   */
+  public void logSettledPurchase(PurchaseEvent.Kind kind, UUID purchaseOperationId, String detail) {
+    wallets
+        .transaction(purchaseOperationId)
+        .thenCompose(
+            found -> {
+              if (found.isEmpty()) {
+                return java.util.concurrent.CompletableFuture.<Void>completedFuture(null);
+              }
+              var purchase = found.get();
+              return wallets
+                  .findAccounts(purchase.uuid().toString())
+                  .thenAccept(
+                      accounts ->
+                          logPurchase(
+                              kind,
+                              purchase.uuid(),
+                              accounts.isEmpty()
+                                  ? purchase.uuid().toString()
+                                  : accounts.get(0).name(),
+                              rewardIdFromReference(purchase.reference()),
+                              quantityFromReference(purchase.reference()),
+                              purchase.amount(),
+                              purchaseOperationId,
+                              detail));
+            })
+        .exceptionally(
+            failure -> {
+              plugin
+                  .getLogger()
+                  .log(
+                      Level.WARNING,
+                      "No se pudo registrar la compra " + purchaseOperationId,
+                      failure);
+              return null;
+            });
+  }
+
+  private void logPurchase(
+      PurchaseEvent.Kind kind,
+      Player player,
+      String rewardId,
+      int quantity,
+      long price,
+      UUID operationId,
+      String detail) {
+    logPurchase(
+        kind, player.getUniqueId(), player.getName(), rewardId, quantity, price, operationId,
+        detail);
+  }
+
+  private void logPurchase(
+      PurchaseEvent.Kind kind,
+      UUID playerId,
+      String playerName,
+      String rewardId,
+      int quantity,
+      long price,
+      UUID operationId,
+      String detail) {
+    try {
+      ShopReward reward = config.current().rewards().get(rewardId);
+      String name =
+          reward == null
+              ? rewardId
+              : PlainTextComponentSerializer.plainText().serialize(messages.parse(reward.name()));
+      long balance =
+          wallets
+              .account(playerId)
+              .map(PlayerAccount::balance)
+              .orElse(PurchaseEvent.UNKNOWN_BALANCE);
+      purchaseLog.accept(
+          new PurchaseEvent(
+              kind,
+              playerId,
+              playerName,
+              rewardId,
+              name,
+              quantity,
+              price,
+              balance,
+              operationId,
+              java.time.Instant.now(),
+              detail));
+    } catch (RuntimeException failure) {
+      // A log line is never worth disturbing the purchase it describes.
+      plugin.getLogger().log(Level.WARNING, "No se pudo registrar la compra " + operationId, failure);
+    }
   }
 
   public int rewardCount() {
@@ -686,7 +799,17 @@ public final class ShopService {
                                       PurchaseResult.DELIVERY_FAILED,
                                       true,
                                       "El jugador se desconectó o murió antes de la entrega");
-                          persistDelivery(player, reward, operationId, outcome, chargedAmount);
+                          persistDelivery(
+                              player, reward, operationId, outcome, chargedAmount, quantity);
+                          if (outcome.result() == PurchaseResult.SUCCESS) {
+                            logPurchase(
+                                PurchaseEvent.Kind.DELIVERED, player, reward.id(), quantity,
+                                chargedAmount, operationId, null);
+                          } else if (!outcome.refundable()) {
+                            logPurchase(
+                                PurchaseEvent.Kind.MANUAL_REVIEW, player, reward.id(), quantity,
+                                chargedAmount, operationId, outcome.error());
+                          }
                           gate.unlock(player.getUniqueId());
                           if (outcome.result() != PurchaseResult.SUCCESS
                               && outcome.refundable()) {
@@ -718,7 +841,8 @@ public final class ShopService {
       ShopReward reward,
       UUID operationId,
       DeliveryOutcome outcome,
-      long chargedAmount) {
+      long chargedAmount,
+      int quantity) {
     UUID playerId = player.getUniqueId();
     if (outcome.result() == PurchaseResult.SUCCESS) {
       markDelivered(operationId, 1);
@@ -744,6 +868,12 @@ public final class ShopService {
               if (!refund.success()) {
                 return java.util.concurrent.CompletableFuture.failedFuture(
                     new IllegalStateException("No se pudo confirmar el reembolso"));
+              }
+              // Only the refund that actually moved gems; a replayed one is a duplicate.
+              if (refund.status() == EconomyResult.Status.SUCCESS) {
+                logPurchase(
+                    PurchaseEvent.Kind.REFUNDED, player, reward.id(), quantity, chargedAmount,
+                    operationId, outcome.error());
               }
               return wallets.markDelivery(operationId, TransactionStatus.REFUNDED, outcome.error());
             })
@@ -777,12 +907,24 @@ public final class ShopService {
     wallets
         .refundPurchase(player.getUniqueId(), operation.amount(), reason, operation.operationId())
         .thenCompose(
-            refund ->
-                refund.success()
-                    ? wallets.markDelivery(
-                        operation.operationId(), TransactionStatus.REFUNDED, reason)
-                    : java.util.concurrent.CompletableFuture.failedFuture(
-                        new IllegalStateException("No se pudo confirmar el reembolso")))
+            refund -> {
+              if (!refund.success()) {
+                return java.util.concurrent.CompletableFuture.failedFuture(
+                    new IllegalStateException("No se pudo confirmar el reembolso"));
+              }
+              if (refund.status() == EconomyResult.Status.SUCCESS) {
+                logPurchase(
+                    PurchaseEvent.Kind.REFUNDED,
+                    player,
+                    rewardIdFromReference(operation.reference()),
+                    quantityFromReference(operation.reference()),
+                    operation.amount(),
+                    operation.operationId(),
+                    reason);
+              }
+              return wallets.markDelivery(
+                  operation.operationId(), TransactionStatus.REFUNDED, reason);
+            })
         .whenComplete((ignored, error) -> logDeliveryAuditFailure(operation.operationId(), error));
   }
 

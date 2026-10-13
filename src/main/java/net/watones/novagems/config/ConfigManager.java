@@ -9,6 +9,7 @@ import java.net.URI;
 import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import net.watones.novagems.purchaselog.PurchaseLogService;
 import net.watones.novagems.storage.MySqlStorageProvider;
 import net.watones.novagems.storage.SQLiteStorageProvider;
 import net.watones.novagems.storage.StorageProvider;
@@ -28,13 +29,21 @@ public final class ConfigManager {
     this.plugin = plugin;
   }
 
+  /**
+   * Startup load. A mistake in the optional purchase log must not keep the economy offline, so
+   * that one section falls back to "off" with a warning; a reload still rejects it outright.
+   */
   public RuntimeConfig load() {
-    RuntimeConfig candidate = parseCandidate();
+    RuntimeConfig candidate = parseCandidate(true);
     swap(candidate);
     return candidate;
   }
 
   public RuntimeConfig parseCandidate() {
+    return parseCandidate(false);
+  }
+
+  private RuntimeConfig parseCandidate(boolean lenientPurchaseLog) {
     FileConfiguration config = loadConfigFile();
     long interval = config.getLong("rewards.interval-seconds", 600);
     long gems = config.getLong("rewards.gems-per-interval", 10);
@@ -166,6 +175,17 @@ public final class ConfigManager {
       throw new IllegalArgumentException("Timeouts de shutdown deben estar entre 1 y 30");
     }
     RuntimeConfig.AlertSettings alerts = parseAlerts(config);
+    RuntimeConfig.PurchaseLogSettings purchaseLog;
+    try {
+      purchaseLog = parsePurchaseLog(config);
+    } catch (IllegalArgumentException invalid) {
+      if (!lenientPurchaseLog) throw invalid;
+      // These messages name the setting, never its value.
+      plugin.getLogger().warning("Registro de compras desactivado: " + invalid.getMessage()
+          + ". Corrígelo y usa /novagems reload.");
+      purchaseLog = new RuntimeConfig.PurchaseLogSettings(
+          false, "", "", "", 3000, true, true, true);
+    }
 
     Sound shopClick =
         parseSound(config, "shop.sounds.click", "ui.button.click");
@@ -236,6 +256,7 @@ public final class ConfigManager {
         alerts,
         new RuntimeConfig.BackupSettings(backupEnabled, backupKeepDays),
         historyKeepDays,
+        purchaseLog,
         config.getBoolean("debug", false));
   }
 
@@ -305,21 +326,53 @@ public final class ConfigManager {
     if (timeout < 500 || timeout > 10_000 || dedupe < 10 || dedupe > 86_400) {
       throw new IllegalArgumentException("Configuración de alerts.discord fuera de rango");
     }
-    if (enabled) {
-      URI parsed;
-      try { parsed = URI.create(url); }
-      catch (IllegalArgumentException invalid) {
-        throw new IllegalArgumentException("alerts.discord.webhook-url no es una URL válida");
-      }
-      if (!"https".equalsIgnoreCase(parsed.getScheme())
-          || !"discord.com".equalsIgnoreCase(parsed.getHost())
-          || parsed.getPath() == null
-          || !parsed.getPath().startsWith("/api/webhooks/")) {
-        throw new IllegalArgumentException(
-            "alerts.discord.webhook-url debe ser una webhook HTTPS de discord.com");
-      }
-    }
+    if (enabled) requireDiscordWebhook(url, "alerts.discord.webhook-url");
     return new RuntimeConfig.AlertSettings(enabled, url, timeout, dedupe);
+  }
+
+  private RuntimeConfig.PurchaseLogSettings parsePurchaseLog(FileConfiguration config) {
+    String prefix = "purchase-log.discord.";
+    boolean enabled = config.getBoolean(prefix + "enabled", false);
+    String url = config.getString(prefix + "webhook-url", "").trim();
+    int timeout = config.getInt(prefix + "timeout-millis", 3000);
+    if (timeout < 500 || timeout > 10_000) {
+      throw new IllegalArgumentException(prefix + "timeout-millis debe estar entre 500 y 10000");
+    }
+    String avatar = config.getString(prefix + "avatar-url", "").trim();
+    // Tried against a sample player: a thumbnail Discord cannot parse would get every message
+    // refused, with nothing in the answer pointing at this setting.
+    if (!avatar.isEmpty()
+        && PurchaseLogService.avatarUrl(
+            avatar, "069a79f4-44e9-4726-a5be-fca90e38aaf5", "Steve") == null) {
+      throw new IllegalArgumentException(
+          prefix + "avatar-url debe ser una URL https válida (admite <uuid> y <name>) o ir vacío");
+    }
+    if (enabled) requireDiscordWebhook(url, prefix + "webhook-url");
+    return new RuntimeConfig.PurchaseLogSettings(
+        enabled,
+        url,
+        config.getString(prefix + "server-name", "").trim(),
+        avatar,
+        timeout,
+        config.getBoolean(prefix + "events.delivered", true),
+        config.getBoolean(prefix + "events.refunded", true),
+        config.getBoolean(prefix + "events.manual-review", true));
+  }
+
+  /** The message names the setting, never the value: the URL is a credential. */
+  private static void requireDiscordWebhook(String url, String path) {
+    URI parsed;
+    try { parsed = URI.create(url); }
+    catch (IllegalArgumentException invalid) {
+      throw new IllegalArgumentException(path + " no es una URL válida");
+    }
+    if (!"https".equalsIgnoreCase(parsed.getScheme())
+        || !"discord.com".equalsIgnoreCase(parsed.getHost())
+        || parsed.getPort() != -1
+        || parsed.getPath() == null
+        || !parsed.getPath().startsWith("/api/webhooks/")) {
+      throw new IllegalArgumentException(path + " debe ser una webhook HTTPS de discord.com");
+    }
   }
 
   private Sound parseSound(FileConfiguration config, String path, String fallback) {

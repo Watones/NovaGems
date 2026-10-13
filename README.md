@@ -94,6 +94,34 @@ La salud del storage, recovery y journal continúa registrándose en consola. El
 Las compras temporales de `shop.yml` usan `accumulate`: comprar otra vez suma días en vez de
 fallar (LuckPerms, por defecto, rechaza un permiso temporal repetido).
 
+## Registro de compras en Discord
+
+Opcional. Cada compra de la tienda se publica en un canal de Discord como un embed con el jugador, el canje, la cantidad, el precio, el saldo que le queda y el número de operación (el mismo que usa `/novagems review`). Se distinguen tres casos, cada uno activable por separado:
+
+- **Compra entregada** (verde): el canje llegó al jugador.
+- **Compra reembolsada** (rojo): no se pudo entregar y se devolvieron las gemas, con el motivo.
+- **Compra en revisión manual** (amarillo): la entrega quedó en duda y el staff debe resolverla.
+
+```yaml
+purchase-log:
+  discord:
+    enabled: true
+    webhook-url: "PEGA_AQUÍ_LA_WEBHOOK_DEL_CANAL_DE_COMPRAS"
+    server-name: "Survival"
+    avatar-url: "https://mc-heads.net/avatar/<name>/64"
+    timeout-millis: 3000
+    events:
+      delivered: true
+      refunded: true
+      manual-review: true
+```
+
+También se publican las compras que se cierran fuera del flujo normal: un reembolso que termina de aplicarse en una pasada de recuperación, una entrega que pasa a revisión manual tras un reinicio y las resoluciones del staff con `/novagems review` (entregada o reembolsada, con el nombre de quien la resolvió).
+
+La imagen del jugador la sirve `mc-heads.net`, un servicio externo al que Discord pide la imagen con el nombre o el UUID del jugador; deja `avatar-url` vacío para no usarlo. Un error en esta sección no impide arrancar el plugin: el registro queda apagado con un aviso en consola.
+
+Usa una webhook distinta de la de alertas. El envío ocurre en un hilo aparte con cola acotada: si varias compras coinciden se agrupan en un mismo mensaje, y si Discord pide esperar se espera y se reintenta. Nunca participa en la compra: un Discord caído como mucho pierde esa línea del registro. Los nombres no pueden generar menciones ni formato. Se recarga con `/novagems reload` y `/novagems status` muestra su estado.
+
 ## Alertas de Discord
 
 Las alertas son opcionales y nunca controlan una mutación económica. Se envían en un worker daemon con cola acotada, timeout y deduplicación; una caída de Discord no bloquea Paper, recovery ni shutdown. Configura una webhook nueva únicamente en `plugins/NovaGems/config.yml` y reinicia o ejecuta `/novagems reload`:

@@ -22,6 +22,7 @@ public record RuntimeConfig(
     AlertSettings alerts,
     BackupSettings backup,
     int historyKeepDays,
+    PurchaseLogSettings purchaseLog,
     boolean debug) {
   public String storageType() {
     return storage.type();
@@ -50,6 +51,7 @@ public record RuntimeConfig(
         alerts,
         backup,
         historyKeepDays,
+        purchaseLog,
         debug);
   }
 
@@ -82,6 +84,35 @@ public record RuntimeConfig(
     @Override public String toString() {
       return "AlertSettings[enabled=" + enabled + ",configured=" + !webhookUrl.isBlank()
           + ",timeoutMillis=" + timeoutMillis + ",dedupeSeconds=" + dedupeSeconds + "]";
+    }
+  }
+
+  /** Shop purchases posted to a Discord channel. The URL is a credential and is never printed. */
+  public record PurchaseLogSettings(
+      boolean enabled,
+      String webhookUrl,
+      String serverName,
+      String avatarUrl,
+      int timeoutMillis,
+      boolean delivered,
+      boolean refunded,
+      boolean manualReview) {
+    public boolean active() {
+      return enabled && !webhookUrl.isBlank();
+    }
+
+    public boolean wants(net.watones.novagems.purchaselog.PurchaseEvent.Kind kind) {
+      return switch (kind) {
+        case DELIVERED -> delivered;
+        case REFUNDED -> refunded;
+        case MANUAL_REVIEW -> manualReview;
+      };
+    }
+
+    @Override public String toString() {
+      return "PurchaseLogSettings[enabled=" + enabled + ",configured=" + !webhookUrl.isBlank()
+          + ",timeoutMillis=" + timeoutMillis + ",delivered=" + delivered + ",refunded="
+          + refunded + ",manualReview=" + manualReview + "]";
     }
   }
 

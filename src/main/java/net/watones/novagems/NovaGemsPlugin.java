@@ -19,6 +19,7 @@ import net.watones.novagems.listener.KillRewardListener;
 import net.watones.novagems.listener.PlayerConnectionListener;
 import net.watones.novagems.message.MessageService;
 import net.watones.novagems.placeholder.NovaGemsExpansion;
+import net.watones.novagems.purchaselog.PurchaseLogService;
 import net.watones.novagems.session.DailyKillTracker;
 import net.watones.novagems.session.RewardService;
 import net.watones.novagems.session.SessionRegistry;
@@ -39,6 +40,7 @@ public final class NovaGemsPlugin extends JavaPlugin {
   private volatile BukkitTask alertTask;
   private volatile BukkitTask historyTask;
   private volatile DiscordWebhookAlertService alerts;
+  private volatile PurchaseLogService purchaseLog;
   private volatile DatabaseBackupService backups;
   private volatile ConfigManager configuration;
   private volatile boolean stopping;
@@ -62,6 +64,8 @@ public final class NovaGemsPlugin extends JavaPlugin {
       RuntimeConfig runtime = config.load();
       alerts = new DiscordWebhookAlertService(
           runtime.alerts(), message -> getLogger().warning("[Discord] " + message));
+      purchaseLog = new PurchaseLogService(
+          runtime.purchaseLog(), message -> getLogger().warning("[Discord] " + message));
       MessageService messages = new MessageService(this);
       ShopConfig shopConfig = new ShopConfig(this);
       var initialShop = shopConfig.validateSafety(
@@ -112,6 +116,8 @@ public final class NovaGemsPlugin extends JavaPlugin {
           registry, guard, rewards, config, this, messages, recovery.writerQueueCapacity());
       ShopService shop =
           new ShopService(this, shopConfig, config, walletsForSessions, messages);
+      PurchaseLogService purchases = purchaseLog;
+      shop.onPurchaseEvent(purchases::record);
       BootstrapContext context = new BootstrapContext(config, runtime, messages, shopConfig,
           initializedStorage, walletsForSessions, registry, guard, initializedSessions, shop);
       Bukkit.getScheduler().runTask(this, () -> finishEnable(context));
@@ -132,6 +138,7 @@ public final class NovaGemsPlugin extends JavaPlugin {
         // Already disabled, so onDisable will not run again to close the alert worker. When the
         // task above was accepted it does, after the startup alert had time to go out.
         if (alerts != null) alerts.close();
+        if (purchaseLog != null) purchaseLog.close();
       }
     }
   }
@@ -168,9 +175,12 @@ public final class NovaGemsPlugin extends JavaPlugin {
         context.shop, context.runtime.storage(),
         context.runtime.queues(), context.runtime.leaderboardCacheSeconds(),
         context.runtime.recovery(), context.sessions, context.storage.description(), alerts,
+        purchaseLog,
         next -> {
           DiscordWebhookAlertService currentAlerts = alerts;
-          if (currentAlerts != null) currentAlerts.reconfigure(next);
+          if (currentAlerts != null) currentAlerts.reconfigure(next.alerts());
+          PurchaseLogService currentPurchases = purchaseLog;
+          if (currentPurchases != null) currentPurchases.reconfigure(next.purchaseLog());
         });
     command("novagems").setExecutor(novaGems);
     command("novagems").setTabCompleter(novaGems);
@@ -236,6 +246,7 @@ public final class NovaGemsPlugin extends JavaPlugin {
       }
     }
     if (alerts != null) alerts.close();
+    if (purchaseLog != null) purchaseLog.close();
   }
 
   /**
@@ -253,6 +264,7 @@ public final class NovaGemsPlugin extends JavaPlugin {
   private void closeContext(BootstrapContext context) {
     closeBootstrap(context.wallets, context.storage);
     if (alerts != null) alerts.close();
+    if (purchaseLog != null) purchaseLog.close();
   }
 
   private void closeBootstrap(WalletService openWallets, StorageProvider openStorage) {

@@ -105,5 +105,29 @@ alerts:
     timeout-millis: 3000
     dedupe-seconds: 300
 
+# Registro de compras de la tienda en un canal de Discord, con un embed por compra: jugador,
+# canje, cantidad, precio, saldo y número de operación. Usa una webhook propia, distinta de la
+# de alertas, para que las compras no se mezclen con los avisos técnicos. La URL es una
+# credencial: nunca se imprime. Si Discord falla o tarda, la compra no se ve afectada; como mucho
+# se pierde esa línea del registro. Se recarga con /novagems reload.
+purchase-log:
+  discord:
+    enabled: false
+    webhook-url: ""
+    # Aparece al pie de cada embed; útil si varios servidores comparten el canal.
+    server-name: ""
+    # Imagen del jugador. La sirve mc-heads.net, un servicio externo: Discord le pide la imagen
+    # con el nombre del jugador (<name>) o su UUID (<uuid>). Con <name> funciona también en
+    # servidores no premium. Déjalo vacío ("") para no mostrar imagen ni usar ese servicio.
+    avatar-url: "https://mc-heads.net/avatar/<name>/64"
+    timeout-millis: 3000
+    events:
+      # La compra llegó al jugador.
+      delivered: true
+      # No se pudo entregar y se devolvieron las gemas.
+      refunded: true
+      # La entrega quedó en duda y el staff debe resolverla con /novagems review.
+      manual-review: true
+
 # Registra transiciones y métricas útiles sin imprimir secretos.
 debug: false

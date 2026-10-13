@@ -82,6 +82,8 @@ public final class WalletService implements AutoCloseable {
   private volatile Consumer<UUID> deliveryReady = ignored -> {};
   private volatile Consumer<UUID> recoveredRewardReady = ignored -> {};
   private volatile Consumer<UUID> manualReviewCreated = ignored -> {};
+  private volatile java.util.function.BiConsumer<UUID, TransactionStatus> purchaseSettledInRecovery =
+      (ignoredId, ignoredStatus) -> {};
   private volatile Consumer<String> debugLog = ignored -> {};
   private volatile Consumer<String> administrativeLog = ignored -> {};
   private final CompletableFuture<Void> administrativeRegistryReady = new CompletableFuture<>();
@@ -332,12 +334,19 @@ public final class WalletService implements AutoCloseable {
         if (operation.type() == TransactionType.PLAYTIME_REWARD) {
           recoveredRewardReady.accept(operation.accountId());
         }
+        if (operation.type() == TransactionType.REFUND
+            && result.status() == DurableMutationResult.Status.APPLIED) {
+          // A refund that only now moved the gems: nobody upstream saw it succeed.
+          notifyPurchaseSettled(operation.reference(), TransactionStatus.REFUNDED);
+        }
         if (currentStatus == TransactionStatus.DELIVERY_STARTED) {
           if (!activeDeliveries.contains(operation.operationId())) {
             storage.markDelivery(operation.operationId(), TransactionStatus.MANUAL_REVIEW,
                 "Servidor reiniciado después de iniciar una entrega; revisión manual requerida");
             manualReviewCount.incrementAndGet();
             manualReviewCreated.accept(operation.operationId());
+            notifyPurchaseSettled(
+                operation.operationId().toString(), TransactionStatus.MANUAL_REVIEW);
             debugLog.accept("manual review created " + operation.operationId());
             removals.add(forgetOperation(operation.operationId()));
             operationProgress = true;
@@ -956,6 +965,24 @@ public final class WalletService implements AutoCloseable {
 
   public void onRecoveredRewardReady(Consumer<UUID> listener) {
     recoveredRewardReady = listener == null ? ignored -> {} : listener;
+  }
+
+  /**
+   * Purchases whose outcome was decided by a recovery pass rather than by the shop: a refund
+   * applied late, or a delivery sent to manual review after a restart. Purely informational.
+   */
+  public void onPurchaseSettledInRecovery(
+      java.util.function.BiConsumer<UUID, TransactionStatus> listener) {
+    purchaseSettledInRecovery = listener == null ? (ignoredId, ignoredStatus) -> {} : listener;
+  }
+
+  private void notifyPurchaseSettled(String purchaseOperationId, TransactionStatus status) {
+    try {
+      purchaseSettledInRecovery.accept(UUID.fromString(purchaseOperationId), status);
+    } catch (RuntimeException failure) {
+      // An observer must never be able to fail the recovery pass that feeds it.
+      debugLog.accept("purchase observer failed: " + failure.getClass().getSimpleName());
+    }
   }
 
   public void onManualReviewCreated(Consumer<UUID> listener) {

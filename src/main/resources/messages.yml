@@ -82,6 +82,7 @@ admin-status-journal: "<yellow>• Journal: <white><health> <gray>· Queue <queu
 admin-status-economy: "<yellow>• Economía: <white><mutations> mutaciones <gray>· <purchases> compras · <reviews> revisiones"
 admin-status-sessions: "<yellow>• Sesiones: <white><sessions> <gray>· Rewards <completed>/<capacity> · Backpressure <backpressure>"
 admin-status-webhook: "<yellow>• Discord webhook: <white><state> <gray>· Queue <queue>"
+admin-status-purchase-log: "<yellow>• Registro de compras: <white><state> <gray>· Queue <queue>"
 admin-status-partial: "<yellow>Algunos contadores no pudieron actualizarse; se muestran los últimos valores conocidos."
 recovery-run-result: "<green>Recovery ejecutado.</green> <gray>Inspeccionadas: <white><inspected></white> · Progreso: <white><progress></white> · Pendientes: <white><pending>"
 recovery-run-failed: "<red>No se pudo ejecutar recovery.</red> <gray>Revisa consola y Discord."

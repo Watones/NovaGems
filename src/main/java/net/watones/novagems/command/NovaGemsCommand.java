@@ -22,6 +22,8 @@ import net.watones.novagems.economy.PlayerAccount;
 import net.watones.novagems.economy.TransactionType;
 import net.watones.novagems.economy.WalletService;
 import net.watones.novagems.message.MessageService;
+import net.watones.novagems.purchaselog.PurchaseEvent;
+import net.watones.novagems.purchaselog.PurchaseLogService;
 import net.watones.novagems.shop.ShopService;
 import net.watones.novagems.session.SessionService;
 import net.watones.novagems.util.Formatters;
@@ -54,7 +56,8 @@ public final class NovaGemsCommand implements CommandExecutor, TabCompleter {
   private final SessionService sessions;
   private final String storageDescription;
   private final DiscordWebhookAlertService alerts;
-  private final Consumer<RuntimeConfig.AlertSettings> alertReload;
+  private final PurchaseLogService purchaseLog;
+  private final Consumer<RuntimeConfig> webhookReload;
   private final Map<ConfirmationKey, Long> confirmations = new ConcurrentHashMap<>();
 
   public NovaGemsCommand(
@@ -71,7 +74,8 @@ public final class NovaGemsCommand implements CommandExecutor, TabCompleter {
       SessionService sessions,
       String storageDescription,
       DiscordWebhookAlertService alerts,
-      Consumer<RuntimeConfig.AlertSettings> alertReload) {
+      PurchaseLogService purchaseLog,
+      Consumer<RuntimeConfig> webhookReload) {
     this.plugin = plugin;
     this.wallets = wallets;
     this.messages = messages;
@@ -85,7 +89,8 @@ public final class NovaGemsCommand implements CommandExecutor, TabCompleter {
     this.sessions = sessions;
     this.storageDescription = storageDescription;
     this.alerts = alerts;
-    this.alertReload = alertReload;
+    this.purchaseLog = purchaseLog;
+    this.webhookReload = webhookReload;
   }
 
   @Override
@@ -346,7 +351,7 @@ public final class NovaGemsCommand implements CommandExecutor, TabCompleter {
         wallets.configureMaxBalance(runtimeCandidate.maxBalance());
         messages.swap(messageCandidate);
         shopConfig.swap(shopCandidate);
-        alertReload.accept(runtimeCandidate.alerts());
+        webhookReload.accept(runtimeCandidate);
         messages.send(sender, "reload-success");
         if (storageChanged) messages.send(sender, "storage-restart");
         plugin.getLogger().info("Canjes recargados: " + shop.rewardCount());
@@ -485,6 +490,10 @@ public final class NovaGemsCommand implements CommandExecutor, TabCompleter {
       sender.sendMessage(messages.component("admin-status-webhook", Map.of(
           "state", alerts != null && alerts.enabled() ? "ON" : "OFF",
           "queue", alerts == null ? "0/0" : alerts.queueSize() + "/" + alerts.queueCapacity())));
+      sender.sendMessage(messages.component("admin-status-purchase-log", Map.of(
+          "state", purchaseLog != null && purchaseLog.enabled() ? "ON" : "OFF",
+          "queue", purchaseLog == null
+              ? "0/0" : purchaseLog.queueSize() + "/" + purchaseLog.queueCapacity())));
       if (error != null) messages.send(sender, "admin-status-partial");
     }));
   }
@@ -593,9 +602,23 @@ public final class NovaGemsCommand implements CommandExecutor, TabCompleter {
     }
     switch (action) {
       case "delivered" -> wallets.resolveReviewDelivered(operationId, admin)
-          .whenComplete((ignored, error) -> reviewResolved(sender, operationId, action, error));
+          .whenComplete((ignored, error) -> {
+            if (error == null) {
+              shop.logSettledPurchase(PurchaseEvent.Kind.DELIVERED, operationId,
+                  "Entrega confirmada por el staff (" + sender.getName() + ")");
+            }
+            reviewResolved(sender, operationId, action, error);
+          });
       case "refund" -> wallets.resolveReviewRefund(operationId, admin)
-          .whenComplete((ignored, error) -> reviewResolved(sender, operationId, action, error));
+          .whenComplete((result, error) -> {
+            // Only the resolution that moved the gems; repeating it is a duplicate.
+            if (error == null && result != null
+                && result.status() == EconomyResult.Status.SUCCESS) {
+              shop.logSettledPurchase(PurchaseEvent.Kind.REFUNDED, operationId,
+                  "Reembolso decidido por el staff (" + sender.getName() + ")");
+            }
+            reviewResolved(sender, operationId, action, error);
+          });
       case "retry" -> wallets.resolveReviewRetry(operationId, admin)
           .whenComplete((result, error) -> {
             if (error == null && result != null && result.success()) {
